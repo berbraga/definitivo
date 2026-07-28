@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Ferramentas
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Segredos
+.env
+
+# Artefatos de execucao
+out/
+.cache/
+*.sqlite
+*.sqlite-journal
+
+# Planilhas de entrada: dados internos de precificacao, nao versionar
+*.xlsx
+*.xls
