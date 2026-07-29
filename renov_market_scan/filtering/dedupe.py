@@ -20,13 +20,14 @@ def canonical_url(url: str) -> str:
     """Strip tracking parameters, fragments and trailing slashes.
 
     Scheme and host are lowercased; the path keeps its case because some
-    marketplaces use case-sensitive advert slugs.
+    marketplaces use case-sensitive advert slugs. Parameters are sorted by name
+    so that different parameter orders canonicalize identically.
     """
     parts = urlsplit(url.strip())
     kept = [(name, value) for name, value in parse_qsl(parts.query) if not _is_tracking(name)]
     path = parts.path.rstrip("/")
     return urlunsplit(
-        (parts.scheme.lower(), parts.netloc.lower(), path, urlencode(kept), "")
+        (parts.scheme.lower(), parts.netloc.lower(), path, urlencode(sorted(kept)), "")
     )
 
 

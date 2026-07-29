@@ -35,3 +35,11 @@ def test_price_must_be_whole_number_not_fragment():
     assert price_has_evidence(3050.0, ["iPhone 13 128GB R$ 2.800,00 zap 11930501234"]) is False
     # 305000 sits inside "1305000" from "R$ 13.050,00"
     assert price_has_evidence(3050.0, ["R$ 13.050,00"]) is False
+
+
+def test_bare_number_without_currency_marker_is_rejected():
+    """A number needs a currency marker to count as evidence of a price."""
+    # Bare number that could be a sales count, not a price
+    assert price_has_evidence(3050.0, ["iPhone 13 128GB, 3050 unidades vendidas"]) is False
+    # Bare number that could be a date fragment, not a price
+    assert price_has_evidence(30.0, ["em 30/50"]) is False

@@ -34,6 +34,12 @@ def test_scheme_and_host_case_are_normalized():
     assert canonical_url("HTTPS://OLX.COM.BR/X-123") == "https://olx.com.br/X-123"
 
 
+def test_query_parameters_are_sorted_for_consistent_canonicalization():
+    url1 = "https://x.com/a?x=1&y=2"
+    url2 = "https://x.com/a?y=2&x=1"
+    assert canonical_url(url1) == canonical_url(url2)
+
+
 def test_same_canonical_url_is_deduped():
     first = make_listing()
     second = make_listing(url=make_listing().url + "?utm_source=x")

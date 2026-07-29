@@ -14,11 +14,18 @@ from renov_market_scan.filtering.text import digit_signature
 
 PRICE_WITHOUT_EVIDENCE = "preco_sem_evidencia"
 
-# A number as a human writes it: digits with optional thousands and decimal
-# separators. Each number is signed on its own, because concatenating every digit
-# in the text would let an unrelated run — a phone number, a CEP, a larger price —
-# contain the price and pass as evidence for it.
-_NUMBER = re.compile(r"\d[\d.,]*")
+# Only currency-marked amounts count as evidence of a price. A bare number in
+# advert text is as likely to be a sales count, a date or a phone fragment — the
+# same reason filtering/price.py requires the R$ marker when parsing. Each amount
+# is signed on its own, because concatenating every digit in the text would let an
+# unrelated run contain the price and pass as evidence for it.
+# Note: a citation stating the price with no currency marker at all (e.g., "Vendo por 3050")
+# is now rejected and the listing is discarded with PRICE_WITHOUT_EVIDENCE. That is the
+# safe direction, since accepting it would mean trusting the model's number with no
+# independent check.
+_MONEY_NUMBER = re.compile(
+    r"(?:r\$\s*(\d[\d.,]*))|(?:(\d[\d.,]*)\s*reais)", re.IGNORECASE
+)
 
 
 def _candidate_signatures(price_brl: float) -> set[str]:
@@ -40,7 +47,7 @@ def price_has_evidence(price_brl: float, evidence_texts: list[str]) -> bool:
     if not signatures:
         return False
     return any(
-        digit_signature(match.group()) in signatures
+        digit_signature(match.group(1) or match.group(2)) in signatures
         for text in evidence_texts
-        for match in _NUMBER.finditer(text)
+        for match in _MONEY_NUMBER.finditer(text)
     )
