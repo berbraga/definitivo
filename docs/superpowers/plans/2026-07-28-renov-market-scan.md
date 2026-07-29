@@ -1308,7 +1308,26 @@ def test_digit_signature_keeps_only_digits():
     assert digit_signature("R$ 3.050,00") == "305000"
     assert digit_signature("R$ 1.234,56") == "123456"
     assert digit_signature("sem numeros") == ""
+
+
+def test_gigas_without_space_before_unit():
+    assert normalize_text("iPhone 13 128Gigas") == "iphone 13 128gb"
+    assert normalize_text("Iphone 13 128GIGA") == "iphone 13 128gb"
+
+
+def test_gigas_with_punctuation_separator():
+    assert normalize_text("128-gigas") == "128gb"
+
+
+def test_giga_prefix_inside_word_is_untouched():
+    assert normalize_text("Gigante") == "gigante"
 ```
+
+Os tres ultimos testes existem porque `\bgigas?\b` nao dispara sem separador antes
+da unidade: digito e letra sao ambos `\w`, entao nao ha fronteira de palavra entre
+`8` e `G`, e `"128Gigas"` — grafia informal comum em anuncio — passaria intacto.
+Dai `_NON_ALNUM` rodar ANTES da unificacao de capacidade e `_GIGAS` usar
+`(?<![a-z])` em vez de `\b`.
 
 - [ ] **Step 2: Rodar o teste para confirmar que falha**
 
@@ -1332,11 +1351,11 @@ punctuation and capacity spelling cannot cause a false mismatch.
 import re
 import unicodedata
 
-_GIGAS = re.compile(r"\bgigas?\b")
+_NON_ALNUM = re.compile(r"[^a-z0-9 ]+")
+_GIGAS = re.compile(r"(?<![a-z])gigas?\b")
 _CAPACITY_SPACING = re.compile(r"(\d+)\s*(gb|tb)\b")
 _ONE_TB = re.compile(r"\b1tb\b")
 _TWO_TB = re.compile(r"\b2tb\b")
-_NON_ALNUM = re.compile(r"[^a-z0-9 ]+")
 _DIGITS = re.compile(r"\D+")
 
 
@@ -1351,12 +1370,12 @@ def normalize_text(text: str) -> str:
     decomposed = unicodedata.normalize("NFKD", lowered)
     unaccented = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
     plussed = unaccented.replace("+", " plus ")
-    unified = _GIGAS.sub("gb", plussed)
+    cleaned = _NON_ALNUM.sub(" ", plussed)
+    unified = _GIGAS.sub("gb", cleaned)
     unified = _CAPACITY_SPACING.sub(r"\1\2", unified)
     unified = _ONE_TB.sub("1024gb", unified)
     unified = _TWO_TB.sub("2048gb", unified)
-    cleaned = _NON_ALNUM.sub(" ", unified)
-    return " ".join(cleaned.split())
+    return " ".join(unified.split())
 
 
 def tokens(text: str) -> list[str]:
@@ -1373,7 +1392,7 @@ def digit_signature(text: str) -> str:
 - [ ] **Step 4: Rodar o teste e confirmar que passa**
 
 Run: `uv run pytest tests/test_text.py -v`
-Expected: PASS, 8 testes
+Expected: PASS, 11 testes
 
 - [ ] **Step 5: Commit**
 
