@@ -1976,7 +1976,7 @@ def load_brand_aliases(path: Path) -> dict[str, list[str]]:
 - [ ] **Step 5: Rodar o teste e confirmar que passa**
 
 Run: `uv run pytest tests/test_matcher.py -v`
-Expected: PASS, 20 testes
+Expected: PASS, 21 testes
 
 - [ ] **Step 6: Rodar lint e type check**
 
