@@ -2097,6 +2097,11 @@ def test_a_screen_being_sold_is_caught():
     assert is_contextual_part("Display Galaxy A17 com aro") is True
 
 
+def test_amoled_screen_is_caught_as_a_part():
+    """An amoled screen sold as a part must not be exempted just for naming its panel."""
+    assert is_contextual_part("Tela Amoled Original Galaxy A17 128GB") is True
+
+
 def test_clean_titles_pass_both_rules():
     title = "Samsung Galaxy A17 5G 128GB usado excelente estado"
     assert is_hard_blacklisted(title) is False
@@ -2164,8 +2169,8 @@ HARD_TERMS: tuple[str, ...] = (
 # present the term is describing the phone's condition or spec, not a part.
 CONTEXTUAL_TERMS: dict[str, tuple[str, ...]] = {
     "bateria": ("saude", "%", "capacidade", "ciclos", "health"),
-    "tela": ("polegada", "polegadas", "amoled", "oled", "hz", "trincada", "quebrada"),
-    "display": ("polegada", "polegadas", "amoled", "oled", "hz"),
+    "tela": ("polegada", "polegadas", "hz", "trincada", "quebrada"),
+    "display": ("polegada", "polegadas", "hz"),
 }
 
 
@@ -2205,7 +2210,7 @@ def is_contextual_part(title: str) -> bool:
 - [ ] **Step 4: Rodar o teste de blacklist e confirmar que passa**
 
 Run: `uv run pytest tests/test_blacklist.py -v`
-Expected: PASS, 8 testes
+Expected: PASS, 9 testes
 
 - [ ] **Step 5: Escrever o teste de condição que falha**
 
@@ -2253,6 +2258,38 @@ def test_new_wins_over_used_when_both_appear():
 
 def test_seminovo_wins_over_usado():
     assert classify_condition("iPhone 13 seminovo, pouco usado") == "seminovo"
+
+
+def test_bare_novo_token_is_recognized():
+    """Bare 'novo' token (not 'novo na caixa' or similar) is detected when present."""
+    assert classify_condition("iPhone 13 128GB novo, nunca usado") == "novo"
+    assert classify_condition("iPhone 13 novo") == "novo"
+
+
+def test_bare_novo_token_does_not_swallow_seminovo():
+    """The bare 'novo' token must be checked after seminovo markers.
+
+    'Semi Novo' splits into ['semi', 'novo'] tokens, and 'novo' alone is the last
+    step of the precedence. If bare 'novo' were checked first, 'semi novo' would
+    be misread as new instead of seminovo.
+    """
+    assert classify_condition("iPhone 13 Semi Novo 128gb") == "seminovo"
+    assert classify_condition("iPhone 13 128gb seminovo, pouco usado") == "seminovo"
+
+
+def test_quase_novo_and_mais_novo_are_not_new():
+    """Qualified 'novo' tokens must not read as new condition.
+
+    'quase novo' (almost new), 'como novo' (like new), and 'praticamente novo'
+    (practically new) are the most common ways a Brazilian seller describes
+    a well-kept used phone. 'mais novo' appears in trade language describing what
+    the seller wants, not what they are selling. All must be rejected when bare
+    'novo' is the only signal.
+    """
+    assert classify_condition("iPhone 13 quase novo") == "seminovo"
+    assert classify_condition("iPhone 12 usado, aceito troca por um mais novo") == "usado"
+    assert classify_condition("iPhone 13 praticamente novo") == "seminovo"
+    assert classify_condition("iPhone 12 usado, esta como novo") == "seminovo"
 ```
 
 - [ ] **Step 6: Rodar o teste para confirmar que falha**
@@ -2265,23 +2302,67 @@ Expected: FAIL com `ModuleNotFoundError`
 ```python
 """Classify the advertised condition of a listing.
 
-Precedence is novo, then seminovo, then usado. A title that says 'lacrado' and
-also 'aceito seu usado na troca' is a sealed unit, so the strongest signal wins
-rather than the first one found.
+Precedence (four-step, strongest to weakest):
+1. NEW_MARKERS — markers that unambiguously mean new (lacrado, novo na caixa, etc.)
+2. SEMI_NEW_MARKERS — markers for refurbished or display units (seminovo, vitrine,
+   quase novo, etc.)
+3. NEW_TOKEN — bare token 'novo' checked after seminovo, never as substring, and
+   only when unqualified. 'quase novo' and 'mais novo' do not read as new.
+4. USED_MARKERS — markers for used condition (usado, usada, etc.)
+
+A title that says 'lacrado' and also 'aceito seu usado na troca' is a sealed unit,
+so the strongest signal wins rather than the first one found.
+
+Known limitations, both deliberate trade-offs:
+- A title mentioning the city 'Novo Hamburgo' will be read as new and dropped
+  from the sample. The opposite error (new phone misread as used) would put a
+  new-phone price into used statistics and inflate the maximum, so this loses
+  fewer listings.
+- A title like 'iPhone 12 usado, troco por iPhone novo' still resolves to novo
+  (the new phone wins). This is deliberate: the legitimate mirror case 'iPhone 13
+  novo, aceito seu usado na troca' is a new phone accepting a used trade-in and
+  must stay novo. Letting an explicit used marker override an unqualified novo
+  token would break that case.
 """
 
 from renov_market_scan.filtering.text import normalize_text
 from renov_market_scan.models import Condition
 
-NEW_MARKERS: tuple[str, ...] = ("lacrado", "novo na caixa", "novo lacrado", "selado")
+NEW_MARKERS: tuple[str, ...] = (
+    "lacrado",
+    "novo na caixa",
+    "novo lacrado",
+    "selado",
+    "nunca usado",
+    "nunca aberto",
+)
 SEMI_NEW_MARKERS: tuple[str, ...] = (
     "seminovo",
     "semi novo",
+    "quase novo",
+    "como novo",
+    "praticamente novo",
     "vitrine",
     "recondicionado",
     "refurbished",
 )
 USED_MARKERS: tuple[str, ...] = ("usado", "usada", "de segunda mao")
+
+# Words that qualify 'novo' into meaning something other than a new unit.
+_NOVO_QUALIFIERS: frozenset[str] = frozenset({"mais", "quase", "como", "praticamente"})
+
+# Checked as a whole token, never as a substring, so 'seminovo' is not read as
+# 'novo'. Checked after the seminovo markers so that 'semi novo' — two tokens —
+# resolves to seminovo rather than new.
+NEW_TOKEN = "novo"
+
+
+def _has_new_token(title_tokens: list[str]) -> bool:
+    """True when 'novo' appears unqualified as a whole token."""
+    return any(
+        token == NEW_TOKEN and (index == 0 or title_tokens[index - 1] not in _NOVO_QUALIFIERS)
+        for index, token in enumerate(title_tokens)
+    )
 
 
 def _contains_any(haystack: str, needles: tuple[str, ...]) -> bool:
@@ -2295,6 +2376,8 @@ def classify_condition(title: str) -> Condition:
         return "novo"
     if _contains_any(normalized, SEMI_NEW_MARKERS):
         return "seminovo"
+    if _has_new_token(normalized.split()):
+        return "novo"
     if _contains_any(normalized, USED_MARKERS):
         return "usado"
     return "desconhecido"
@@ -2303,7 +2386,7 @@ def classify_condition(title: str) -> Condition:
 - [ ] **Step 8: Rodar o teste de condição e confirmar que passa**
 
 Run: `uv run pytest tests/test_condition.py -v`
-Expected: PASS, 6 testes
+Expected: PASS, 9 testes
 
 - [ ] **Step 9: Rodar lint, type check e a suíte inteira**
 
