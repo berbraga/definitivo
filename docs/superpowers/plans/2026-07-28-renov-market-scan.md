@@ -978,7 +978,6 @@ def make_row(**overrides) -> DeviceRow:
 
 
 def test_unambiguous_storages_are_normalized():
-    assert normalize_storage("128") == normalize_storage("128")
     assert normalize_storage("128").label == "128GB"
     assert normalize_storage("128").gb == 128
     assert normalize_storage("128").suspicious is False
@@ -1800,8 +1799,9 @@ TOLERATED_VARIANT = "5g"
 _YEAR = re.compile(r"^20[0-2]\d$")
 _GRADE_TOKEN = "a0"
 
-# 'BY SWAROVSK' is spelled truncated in the sheet; normalize to one token.
-_SWAROVSKI_SPELLINGS = ("by swarovsk", "swarovsk", "swarovski")
+# 'BY SWAROVSK' is spelled truncated in the sheet. One pass, so that an
+# already-normalized 'swarovski' is not extended into 'swarovskii'.
+_SWAROVSKI = re.compile(r"\b(?:by\s+)?swarovsk\w*")
 
 
 @dataclass(frozen=True)
@@ -1815,10 +1815,7 @@ class MatchResult:
 
 def _canonical(text: str) -> str:
     """Normalize and fold the Swarovski spellings into one token."""
-    normalized = normalize_text(text)
-    for spelling in _SWAROVSKI_SPELLINGS:
-        normalized = normalized.replace(spelling, "swarovski")
-    return normalized
+    return _SWAROVSKI.sub("swarovski", normalize_text(text))
 
 
 def qualifiers_in(text: str) -> set[str]:
@@ -5929,7 +5926,7 @@ def _write_sheet(
     for index, column in enumerate(columns, start=1):
         letter = get_column_letter(index)
         longest = max(
-            [len(str(column))] + [len(str(row.get(column) or "")) for row in rows] or [0]
+            [len(str(column))] + [len(str(row.get(column) or "")) for row in rows]
         )
         sheet.column_dimensions[letter].width = min(
             max(longest + 2, MIN_COLUMN_WIDTH), MAX_COLUMN_WIDTH
@@ -6436,50 +6433,72 @@ async def _collect(
     connection: sqlite3.Connection,
     progress: Callable[[int, int], None] | None,
 ) -> int:
-    """One adapter call per (item, source), carrying every phrase."""
-    tasks: list[tuple[SearchPlanItem, Source]] = [
+    """One adapter call per (item, source), carrying every phrase.
+
+    Calls run concurrently: the adapter's semaphore is what bounds them, so
+    awaiting each pair in sequence here would pin real concurrency at one and
+    make --concorrencia and the estimated runtime meaningless.
+    """
+    pairs: list[tuple[SearchPlanItem, Source]] = [
         (item, source) for item in plan for source in sources
     ]
-    total = len(tasks)
+    total = len(pairs)
+
+    # One cached response per (key, source, day). The phrase index column
+    # records which phrase set produced it; the standard pair is 0.
+    outstanding: list[tuple[SearchPlanItem, Source]] = [
+        (item, source)
+        for item, source in pairs
+        if not (
+            options.resume
+            and has_raw(
+                connection,
+                item.search_key,
+                source.name,
+                COMBINED_PHRASE_INDEX,
+                options.collected_on,
+            )
+        )
+    ]
+
     done = 0
     performed = 0
+    write_lock = asyncio.Lock()
 
-    for item, source in tasks:
-        queries = build_queries(item, [source], brand_aliases)
+    def advance() -> None:
+        nonlocal done
         done += 1
-
-        # One cached response per (key, source, day). The phrase index column
-        # records which phrase set produced it; the standard pair is 0.
-        if options.resume and has_raw(
-            connection,
-            item.search_key,
-            source.name,
-            COMBINED_PHRASE_INDEX,
-            options.collected_on,
-        ):
-            if progress is not None:
-                progress(done, total)
-            continue
-
-        outcome = await adapter.search(queries)
-        performed += 1
-        save_raw(
-            connection,
-            RawResponse(
-                search_key=item.search_key,
-                source=source.name,
-                phrase_index=COMBINED_PHRASE_INDEX,
-                collected_on=options.collected_on,
-                payload=outcome.payload,
-                status=outcome.status,
-            ),
-        )
-        save_listings(
-            connection, item.search_key, source.name, options.collected_on, outcome.listings
-        )
         if progress is not None:
             progress(done, total)
 
+    for _ in range(total - len(outstanding)):
+        advance()
+
+    async def collect_one(item: SearchPlanItem, source: Source) -> None:
+        nonlocal performed
+        queries = build_queries(item, [source], brand_aliases)
+        outcome = await adapter.search(queries)
+        # The adapter's semaphore bounds real concurrency; this lock keeps the
+        # SQLite writes from interleaving.
+        async with write_lock:
+            performed += 1
+            save_raw(
+                connection,
+                RawResponse(
+                    search_key=item.search_key,
+                    source=source.name,
+                    phrase_index=COMBINED_PHRASE_INDEX,
+                    collected_on=options.collected_on,
+                    payload=outcome.payload,
+                    status=outcome.status,
+                ),
+            )
+            save_listings(
+                connection, item.search_key, source.name, options.collected_on, outcome.listings
+            )
+            advance()
+
+    await asyncio.gather(*(collect_one(item, source) for item, source in outstanding))
     return performed
 
 
