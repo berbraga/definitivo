@@ -4265,11 +4265,11 @@ def status_for_error(error_code: str) -> str:
 
 from typing import Any
 
-from renov_market_scan.collect.base import SearchOutcome
+from renov_market_scan.collect.base import SearchAdapter, SearchOutcome
 from renov_market_scan.models import Listing, Query
 
 
-class FixtureAdapter:
+class FixtureAdapter(SearchAdapter):
     """Return canned listings keyed by (search_key, source)."""
 
     def __init__(
@@ -4294,13 +4294,23 @@ class FixtureAdapter:
             "queries": [query.text for query in queries],
             "listings": [item.model_dump() for item in listings],
         }
-        return SearchOutcome(listings=list(listings), status=status, payload=payload)
+        return SearchOutcome(
+            listings=[item.model_copy() for item in listings], status=status, payload=payload
+        )
 ```
+
+Subclassing explicito do Protocol e deliberado: o mypy roda so sobre
+`renov_market_scan`, e enquanto nenhum modulo do pacote consome `SearchAdapter` a
+conformidade estrutural nao e checada em lugar nenhum. Com a base explicita, drift de
+assinatura vira erro de override. Verificado: regredir para `query: Query` com a base
+explicita produz erro do mypy; sem a base, passa calado. `model_copy()` por item existe
+porque `list(...)` copia so a lista externa e pydantic e mutavel por default, entao teste
+que mutar anuncio devolvido corromperia o fixture da chamada seguinte.
 
 - [ ] **Step 6: Rodar os testes e confirmar que passam**
 
 Run: `uv run pytest tests/test_errors.py tests/test_fixture_adapter.py -v`
-Expected: PASS, 12 testes
+Expected: PASS, 16 testes
 
 - [ ] **Step 7: Rodar lint, type check e a suíte inteira, depois commit**
 
