@@ -56,3 +56,26 @@ def test_calls_are_recorded_so_tests_can_assert_zero_network():
     asyncio.run(adapter.search([QUERY]))
     asyncio.run(adapter.search([QUERY]))
     assert adapter.call_count == 2
+
+
+def test_both_phrases_travel_in_one_call_so_max_uses_caps_the_pair():
+    """Both phrases for a (model, source) pair travel in a single call so that
+    the tool's max_uses cap applies to the whole pair, which is what the cost
+    estimate assumes. An earlier design dropped the second phrase silently."""
+    query_0 = Query(
+        search_key="k1",
+        source="olx",
+        domain="olx.com.br",
+        phrase_index=0,
+        text="iphone 13 128gb",
+    )
+    query_1 = Query(
+        search_key="k1",
+        source="olx",
+        domain="olx.com.br",
+        phrase_index=1,
+        text="iphone 13 128gb -broken -troco",
+    )
+    adapter = FixtureAdapter({("k1", "olx"): [make_listing()]})
+    outcome = asyncio.run(adapter.search([query_0, query_1]))
+    assert outcome.payload["queries"] == ["iphone 13 128gb", "iphone 13 128gb -broken -troco"]

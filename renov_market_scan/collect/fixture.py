@@ -2,11 +2,11 @@
 
 from typing import Any
 
-from renov_market_scan.collect.base import SearchOutcome
+from renov_market_scan.collect.base import SearchAdapter, SearchOutcome
 from renov_market_scan.models import Listing, Query
 
 
-class FixtureAdapter:
+class FixtureAdapter(SearchAdapter):
     """Return canned listings keyed by (search_key, source)."""
 
     def __init__(
@@ -31,4 +31,8 @@ class FixtureAdapter:
             "queries": [query.text for query in queries],
             "listings": [item.model_dump() for item in listings],
         }
-        return SearchOutcome(listings=list(listings), status=status, payload=payload)
+        return SearchOutcome(
+            listings=[item.model_copy() for item in listings],
+            status=status,
+            payload=payload,
+        )

@@ -1,4 +1,11 @@
-from renov_market_scan.collect.errors import STATUS_FOR_ERROR, ErrorAction, classify_tool_error
+from renov_market_scan.collect.errors import (
+    ACTION_FOR_ERROR,
+    STATUS_FOR_ERROR,
+    STATUS_UNKNOWN_ERROR,
+    ErrorAction,
+    classify_tool_error,
+    status_for_error,
+)
 
 
 def test_transient_errors_are_retried():
@@ -36,3 +43,19 @@ def test_every_documented_code_maps_to_a_status_string():
         "invalid_tool_input",
     ):
         assert STATUS_FOR_ERROR[code]
+
+
+def test_status_for_error_returns_pt_br_status_for_known_codes():
+    assert status_for_error("too_many_requests") == "limite_de_taxa"
+    assert status_for_error("invalid_tool_input") == "erro_query"
+
+
+def test_status_for_error_returns_unknown_status_for_unmapped_codes():
+    assert status_for_error("something_new_from_the_api") == STATUS_UNKNOWN_ERROR
+
+
+def test_action_and_status_tables_stay_in_sync():
+    """A code in one table but not the other means either a decision nothing
+    can record or a status nothing can reach. Both tables must have identical
+    keys."""
+    assert ACTION_FOR_ERROR.keys() == STATUS_FOR_ERROR.keys()
