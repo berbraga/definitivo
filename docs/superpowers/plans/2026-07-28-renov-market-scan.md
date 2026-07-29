@@ -1216,9 +1216,11 @@ uv run python -c "
 from pathlib import Path
 from renov_market_scan.ingest.reader import read_device_rows
 from renov_market_scan.ingest.normalize import build_search_plan
+# ativos e todos contam ITENS DE PLANO, nao linhas: linha com storage suspeito
+# nunca entra no plano, nos dois modos. 1032-88=944 e 119-5=114.
 for name, ativos, todos, anom in [
-    ('RS_Maio_Androids_2026.xlsx', 285, 1031, 88),
-    ('Template-iPhone.xlsx', 95, 119, 5),
+    ('RS_Maio_Androids_2026.xlsx', 285, 944, 88),
+    ('Template-iPhone.xlsx', 95, 114, 5),
 ]:
     rows, _ = read_device_rows(Path(name))
     plan_at, anom_at = build_search_plan(rows, active_only=True)
@@ -1231,7 +1233,7 @@ for name, ativos, todos, anom in [
 print('ok')
 "
 ```
-Expected: `RS_Maio_Androids_2026.xlsx: ativos=285 todos=1031 anomalias_todos=88 anomalias_ativos=0`, `Template-iPhone.xlsx: ativos=95 todos=119 anomalias_todos=5 anomalias_ativos=0`, `ok`
+Expected: `RS_Maio_Androids_2026.xlsx: ativos=285 todos=944 anomalias_todos=88 anomalias_ativos=0`, `Template-iPhone.xlsx: ativos=95 todos=114 anomalias_todos=5 anomalias_ativos=0`, `ok`
 
 - [ ] **Step 6: Rodar lint e type check**
 
