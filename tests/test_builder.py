@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from renov_market_scan.models import ReportKey, SearchPlanItem
 from renov_market_scan.query.builder import (
     PHRASE_COUNT,
@@ -113,3 +115,35 @@ def test_domain_travels_with_the_query():
     for query in build_queries(make_item(), sources, {}):
         assert query.domain == "olx.com.br"
         assert query.search_key == "k1"
+
+
+def test_duplicate_sources_are_deduplicated_to_avoid_double_billing():
+    """A duplicated source name (same or different case) should not generate
+    duplicate queries, which would cost money with no sample benefit."""
+    sources = load_sources(Path("fontes.yaml"))
+    selected_dup = enabled_sources(sources, ["olx", "olx"])
+    selected_case = enabled_sources(sources, ["olx", "OLX"])
+    item = make_item()
+    queries_dup = build_queries(item, selected_dup, {})
+    queries_case = build_queries(item, selected_case, {})
+    assert len(queries_dup) == PHRASE_COUNT
+    assert len(queries_case) == PHRASE_COUNT
+    assert {query.source for query in queries_dup} == {"olx"}
+    assert {query.source for query in queries_case} == {"olx"}
+
+
+def test_unmatched_source_name_raises_with_valid_names():
+    sources = load_sources(Path("fontes.yaml"))
+    with pytest.raises(ValueError) as exc_info:
+        enabled_sources(sources, ["olxx"])
+    assert "olxx" in str(exc_info.value)
+    assert "Valid sources:" in str(exc_info.value)
+
+
+def test_mixed_case_alias_is_lowercased_in_phrase():
+    sources = enabled_sources(load_sources(Path("fontes.yaml")), ["olx"])
+    item = make_item(manufacturer="REDMI", model="NOTE 12")
+    aliases = {"REDMI": ["Xiaomi Redmi"]}
+    generic = next(q for q in build_queries(item, sources, aliases) if q.phrase_index == 0)
+    assert "xiaomi redmi" in generic.text
+    assert "Xiaomi" not in generic.text

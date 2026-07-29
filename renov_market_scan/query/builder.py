@@ -46,14 +46,21 @@ def enabled_sources(sources: list[Source], wanted: list[str] | None) -> list[Sou
         return [source for source in sources if source.enabled]
     requested = [name.strip().lower() for name in wanted if name.strip()]
     by_name = {source.name.lower(): source for source in sources}
-    return [by_name[name] for name in requested if name in by_name]
+    requested_dedup = list(dict.fromkeys(requested))
+    unmatched = [name for name in requested_dedup if name not in by_name]
+    if unmatched:
+        valid_names = ", ".join(sorted(by_name.keys()))
+        raise ValueError(
+            f"Unknown source(s): {', '.join(unmatched)}. Valid sources: {valid_names}"
+        )
+    return [by_name[name] for name in requested_dedup]
 
 
 def _brand_term(manufacturer: str, brand_aliases: dict[str, list[str]]) -> str:
     """The market-facing brand name, which is not always the sheet value."""
     aliases = brand_aliases.get(manufacturer.upper())
     if aliases:
-        return aliases[0]
+        return aliases[0].lower()
     return manufacturer.lower()
 
 
