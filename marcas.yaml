@@ -1,0 +1,10 @@
+# Aliases de fabricante usados na montagem da query.
+# A planilha lista sub-marcas como fabricantes independentes; o mercado usa a
+# marca-mae. Medido nos dados: REDMI 107 linhas, POCO 7, JOVI 11, VIVO 2,
+# ITEL 1, ITEL MOBILE 1.
+REDMI: ["xiaomi redmi", "redmi"]
+POCO: ["xiaomi poco", "poco"]
+JOVI: ["vivo", "jovi"]
+VIVO: ["vivo"]
+"ITEL MOBILE": ["itel"]
+ITEL: ["itel"]
