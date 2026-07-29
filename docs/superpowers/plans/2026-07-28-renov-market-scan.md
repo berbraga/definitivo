@@ -3767,6 +3767,8 @@ Arquivo `tests/test_builder.py`:
 ```python
 from pathlib import Path
 
+import pytest
+
 from renov_market_scan.models import ReportKey, SearchPlanItem
 from renov_market_scan.query.builder import (
     PHRASE_COUNT,
@@ -3875,6 +3877,36 @@ def test_terabyte_label_reaches_the_query_as_written():
     assert "1tb" in generic.text
 
 
+def test_duplicate_sources_are_deduplicated_to_avoid_double_billing():
+    """A duplicated source name (same or different case) should not generate
+    duplicate queries, which would cost money with no sample benefit."""
+    sources = load_sources(Path("fontes.yaml"))
+    selected_dup = enabled_sources(sources, ["olx", "olx"])
+    selected_case = enabled_sources(sources, ["olx", "OLX"])
+    item = make_item()
+    assert len(build_queries(item, selected_dup, {})) == PHRASE_COUNT
+    assert len(build_queries(item, selected_case, {})) == PHRASE_COUNT
+
+
+def test_unmatched_source_name_raises_with_valid_names():
+    """A typo must fail loudly: silently dropping it yields a run that costs
+    nothing, finds nothing and reports nothing."""
+    sources = load_sources(Path("fontes.yaml"))
+    with pytest.raises(ValueError) as exc_info:
+        enabled_sources(sources, ["olxx"])
+    assert "olxx" in str(exc_info.value)
+    assert "Valid sources:" in str(exc_info.value)
+
+
+def test_mixed_case_alias_is_lowercased_in_phrase():
+    sources = enabled_sources(load_sources(Path("fontes.yaml")), ["olx"])
+    item = make_item(manufacturer="REDMI", model="NOTE 12")
+    aliases = {"REDMI": ["Xiaomi Redmi"]}
+    generic = next(q for q in build_queries(item, sources, aliases) if q.phrase_index == 0)
+    assert "xiaomi redmi" in generic.text
+    assert "Xiaomi" not in generic.text
+
+
 def test_domain_travels_with_the_query():
     sources = enabled_sources(load_sources(Path("fontes.yaml")), ["olx"])
     for query in build_queries(make_item(), sources, {}):
@@ -3943,14 +3975,21 @@ def enabled_sources(sources: list[Source], wanted: list[str] | None) -> list[Sou
         return [source for source in sources if source.enabled]
     requested = [name.strip().lower() for name in wanted if name.strip()]
     by_name = {source.name.lower(): source for source in sources}
-    return [by_name[name] for name in requested if name in by_name]
+    requested_dedup = list(dict.fromkeys(requested))
+    unmatched = [name for name in requested_dedup if name not in by_name]
+    if unmatched:
+        valid_names = ", ".join(sorted(by_name.keys()))
+        raise ValueError(
+            f"Unknown source(s): {', '.join(unmatched)}. Valid sources: {valid_names}"
+        )
+    return [by_name[name] for name in requested_dedup]
 
 
 def _brand_term(manufacturer: str, brand_aliases: dict[str, list[str]]) -> str:
     """The market-facing brand name, which is not always the sheet value."""
     aliases = brand_aliases.get(manufacturer.upper())
     if aliases:
-        return aliases[0]
+        return aliases[0].lower()
     return manufacturer.lower()
 
 
@@ -3986,7 +4025,7 @@ def build_queries(
 - [ ] **Step 5: Rodar o teste e confirmar que passa**
 
 Run: `uv run pytest tests/test_builder.py -v`
-Expected: PASS, 11 testes
+Expected: PASS, 14 testes
 
 - [ ] **Step 6: Rodar lint, type check e a suíte inteira, depois commit**
 
