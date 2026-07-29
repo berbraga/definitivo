@@ -123,6 +123,15 @@ def test_wrong_capacity_is_detected():
     assert capacity_present(128, "iPhone 13 256GB seminovo", "https://x") is False
 
 
+def test_capacity_not_matched_as_suffix_of_larger_number():
+    # Current value set (32, 64, 128, 256, 512, 1024, 2048) avoids collisions by
+    # coincidence; digit boundaries are explicit to prevent 28 matching 128.
+    assert capacity_present(28, "iPhone 13 128GB seminovo", "https://x") is False
+    assert capacity_present(24, "iPhone 15 Pro 1024GB", "https://x") is False
+    assert capacity_present(48, "iPhone 13 2048GB", "https://x") is False
+    assert capacity_present(28, "iPhone 13 seminovo", "https://olx.com.br/x/128gb") is False
+
+
 def test_brand_aliases_load_from_yaml():
     aliases = load_brand_aliases(Path("marcas.yaml"))
     assert "xiaomi redmi" in aliases["REDMI"]

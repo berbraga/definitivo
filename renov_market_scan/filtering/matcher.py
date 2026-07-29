@@ -119,8 +119,10 @@ def capacity_present(storage_gb: int, title: str, url: str) -> bool:
     Capacity moves the price too much to infer, so an advert that does not state
     it is discarded rather than assumed.
     """
-    needle = f"{storage_gb}gb"
-    return needle in normalize_text(title) or needle in normalize_text(url)
+    pattern = rf"(?<!\d){storage_gb}gb\b"
+    return bool(
+        re.search(pattern, normalize_text(title)) or re.search(pattern, normalize_text(url))
+    )
 
 
 def load_brand_aliases(path: Path) -> dict[str, list[str]]:
