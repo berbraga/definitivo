@@ -61,10 +61,13 @@ def test_bare_novo_token_does_not_swallow_seminovo():
 def test_quase_novo_and_mais_novo_are_not_new():
     """Qualified 'novo' tokens must not read as new condition.
 
-    'quase novo' (almost new) is the most common way a Brazilian seller describes
+    'quase novo' (almost new), 'como novo' (like new), and 'praticamente novo'
+    (practically new) are the most common ways a Brazilian seller describes
     a well-kept used phone. 'mais novo' appears in trade language describing what
-    the seller wants, not what they are selling. Both must be rejected when bare
+    the seller wants, not what they are selling. All must be rejected when bare
     'novo' is the only signal.
     """
     assert classify_condition("iPhone 13 quase novo") == "seminovo"
     assert classify_condition("iPhone 12 usado, aceito troca por um mais novo") == "usado"
+    assert classify_condition("iPhone 13 praticamente novo") == "seminovo"
+    assert classify_condition("iPhone 12 usado, esta como novo") == "seminovo"

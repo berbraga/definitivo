@@ -38,16 +38,16 @@ SEMI_NEW_MARKERS: tuple[str, ...] = (
     "seminovo",
     "semi novo",
     "quase novo",
+    "como novo",
+    "praticamente novo",
     "vitrine",
     "recondicionado",
     "refurbished",
 )
 USED_MARKERS: tuple[str, ...] = ("usado", "usada", "de segunda mao")
 
-# A bare 'novo' means new, but 'mais novo' and 'quase novo' do not: the first is
-# trade language for what the seller wants, the second describes a well-kept used
-# phone. Both must not read as new.
-_NOVO_QUALIFIERS: frozenset[str] = frozenset({"mais", "quase"})
+# Qualifiers that prevent a 'novo' token from indicating new condition.
+_NOVO_QUALIFIERS: frozenset[str] = frozenset({"mais", "quase", "como", "praticamente"})
 
 # Checked as a whole token, never as a substring, so 'seminovo' is not read as
 # 'novo'. Checked after the seminovo markers so that 'semi novo' — two tokens —
