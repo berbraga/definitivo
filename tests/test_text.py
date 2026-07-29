@@ -37,3 +37,16 @@ def test_digit_signature_keeps_only_digits():
     assert digit_signature("R$ 3.050,00") == "305000"
     assert digit_signature("R$ 1.234,56") == "123456"
     assert digit_signature("sem numeros") == ""
+
+
+def test_gigas_without_space_before_unit():
+    assert normalize_text("iPhone 13 128Gigas") == "iphone 13 128gb"
+    assert normalize_text("Iphone 13 128GIGA") == "iphone 13 128gb"
+
+
+def test_gigas_with_punctuation_separator():
+    assert normalize_text("128-gigas") == "128gb"
+
+
+def test_giga_prefix_inside_word_is_untouched():
+    assert normalize_text("Gigante") == "gigante"
