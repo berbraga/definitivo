@@ -1827,6 +1827,15 @@ def test_wrong_capacity_is_detected():
     assert capacity_present(128, "iPhone 13 256GB seminovo", "https://x") is False
 
 
+def test_capacity_not_matched_as_suffix_of_larger_number():
+    # Current value set (32, 64, 128, 256, 512, 1024, 2048) avoids collisions by
+    # coincidence; digit boundaries are explicit to prevent 28 matching 128.
+    assert capacity_present(28, "iPhone 13 128GB seminovo", "https://x") is False
+    assert capacity_present(24, "iPhone 15 Pro 1024GB", "https://x") is False
+    assert capacity_present(48, "iPhone 13 2048GB", "https://x") is False
+    assert capacity_present(28, "iPhone 13 seminovo", "https://olx.com.br/x/128gb") is False
+
+
 def test_brand_aliases_load_from_yaml():
     aliases = load_brand_aliases(Path("marcas.yaml"))
     assert "xiaomi redmi" in aliases["REDMI"]
@@ -1962,8 +1971,10 @@ def capacity_present(storage_gb: int, title: str, url: str) -> bool:
     Capacity moves the price too much to infer, so an advert that does not state
     it is discarded rather than assumed.
     """
-    needle = f"{storage_gb}gb"
-    return needle in normalize_text(title) or needle in normalize_text(url)
+    pattern = rf"(?<!\d){storage_gb}gb\b"
+    return bool(
+        re.search(pattern, normalize_text(title)) or re.search(pattern, normalize_text(url))
+    )
 
 
 def load_brand_aliases(path: Path) -> dict[str, list[str]]:
@@ -1976,7 +1987,7 @@ def load_brand_aliases(path: Path) -> dict[str, list[str]]:
 - [ ] **Step 5: Rodar o teste e confirmar que passa**
 
 Run: `uv run pytest tests/test_matcher.py -v`
-Expected: PASS, 21 testes
+Expected: PASS, 22 testes
 
 - [ ] **Step 6: Rodar lint e type check**
 
