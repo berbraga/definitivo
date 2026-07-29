@@ -5489,7 +5489,14 @@ nao de suposicao."
 Arquivo `tests/test_assemble.py`:
 
 ```python
-from renov_market_scan.models import Anomaly, Listing, ModelStats, RejectedListing, ReportKey, SearchPlanItem
+from renov_market_scan.models import (
+    Anomaly,
+    Listing,
+    ModelStats,
+    RejectedListing,
+    ReportKey,
+    SearchPlanItem,
+)
 from renov_market_scan.report.assemble import (
     ANOMALY_COLUMNS,
     DISCARDED_COLUMNS,
@@ -5625,7 +5632,8 @@ def test_anomaly_rows_include_storage_and_empty_samples():
         row_number=5, erp_code="10000A0", device_name="MOTO XT882 1GB A0",
         field="Storage, GB*", raw_value="1", reason="storage_suspeito", status="revisao_humana",
     )
-    rows = build_anomaly_rows([anomaly], [make_item()], {"k1": make_stats(n=0, status="insuficiente")})
+    stats = {"k1": make_stats(n=0, status="insuficiente")}
+    rows = build_anomaly_rows([anomaly], [make_item()], stats)
     assert set(rows[0]) == set(ANOMALY_COLUMNS)
     reasons = {row["motivo"] for row in rows}
     assert "storage_suspeito" in reasons
