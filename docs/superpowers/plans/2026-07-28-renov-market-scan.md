@@ -3476,7 +3476,9 @@ def test_count_raw_counts_only_the_requested_day(tmp_path):
 
 def test_listings_round_trip_grouped_by_search_key(tmp_path):
     conn = open_store(tmp_path / "scan.sqlite")
-    save_listings(conn, "k1", "olx", DAY, [make_listing(), make_listing(url="https://olx.com.br/a-2")])
+    save_listings(
+        conn, "k1", "olx", DAY, [make_listing(), make_listing(url="https://olx.com.br/a-2")]
+    )
     save_listings(conn, "k2", "olx", DAY, [make_listing(search_key="k2")])
     loaded = load_listings(conn, DAY)
     assert set(loaded) == {"k1", "k2"}
@@ -3488,7 +3490,9 @@ def test_listings_round_trip_grouped_by_search_key(tmp_path):
 
 def test_resaving_listings_for_a_key_replaces_the_previous_set(tmp_path):
     conn = open_store(tmp_path / "scan.sqlite")
-    save_listings(conn, "k1", "olx", DAY, [make_listing(), make_listing(url="https://olx.com.br/a-2")])
+    save_listings(
+        conn, "k1", "olx", DAY, [make_listing(), make_listing(url="https://olx.com.br/a-2")]
+    )
     save_listings(conn, "k1", "olx", DAY, [make_listing()])
     loaded = load_listings(conn, DAY)
     assert len(loaded["k1"]) == 1

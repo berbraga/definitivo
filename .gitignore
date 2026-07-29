@@ -19,6 +19,8 @@ out/
 .cache/
 *.sqlite
 *.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
 
 # Planilhas de entrada: dados internos de precificacao, nao versionar
 *.xlsx
