@@ -70,3 +70,54 @@ def test_parcelas_de_phrasing_is_rejected():
     price, reason = extract_price("Redmi Note 12 parcelas de R$ 120,00")
     assert price is None
     assert reason == PRICE_INSTALLMENT
+
+
+def test_installment_with_connector_words_before_amount():
+    """Connector words like 'sem juros de' between count and amount must be recognized."""
+    price, reason = extract_price("iPhone 13 128GB em ate 12x sem juros de R$ 254,17")
+    assert price is None
+    assert reason == PRICE_INSTALLMENT
+
+    price, reason = extract_price("iPhone 13 128GB em até 12x sem juros de R$ 254,17")
+    assert price is None
+    assert reason == PRICE_INSTALLMENT
+
+
+def test_installment_with_cartao_variants():
+    """Both accented and unaccented 'cartão' variants must be recognized."""
+    price, reason = extract_price("iPhone 13 128GB 10x no cartão de R$ 199,00")
+    assert price is None
+    assert reason == PRICE_INSTALLMENT
+
+    price, reason = extract_price("iPhone 13 128GB 10x no cartao de R$ 199,00")
+    assert price is None
+    assert reason == PRICE_INSTALLMENT
+
+
+def test_parcelado_phrasing_is_rejected():
+    """'Parcelado' without explicit count must still be recognized as installment."""
+    price, reason = extract_price("Redmi Note 12 parcelado sem juros R$ 120,00")
+    assert price is None
+    assert reason == PRICE_INSTALLMENT
+
+
+def test_high_digit_count_is_not_installment():
+    """Camera specs like 'Space Zoom 100x' must not be treated as installment counts."""
+    price, reason = extract_price("Samsung Galaxy S23 Ultra 256GB Space Zoom 100x R$ 4.500,00")
+    assert price == 4500.0
+    assert reason is None
+
+
+def test_cash_price_with_sem_juros_suffix_is_not_rejected():
+    """'sem juros' after a cash price without preceding installment count is not rejection."""
+    price, reason = extract_price("iPhone 13 128GB R$ 3.050,00 sem juros no cartão")
+    assert price == 3050.0
+    assert reason is None
+
+
+def test_cash_price_wins_over_installment_with_connectors():
+    """Cash price must win even when installment has connector words."""
+    title = "iPhone 13 128GB em 12x sem juros de R$ 254,17 ou R$ 2.900,00 a vista"
+    price, reason = extract_price(title)
+    assert price == 2900.0
+    assert reason is None

@@ -9,11 +9,18 @@ PRICE_INSTALLMENT = "preco_parcelado"
 # usually battery health, screen size or camera count, not a price.
 _MONEY = re.compile(r"r\$\s*(\d[\d.,]*)", re.IGNORECASE)
 
-# 'Nx', 'N x', 'Nx de', 'em Nx de' immediately before the amount.
-_INSTALLMENT_PREFIX = re.compile(r"(\d+\s*x\s*(de\s*)?|parcelas?\s+de\s*)$", re.IGNORECASE)
+# Connector words that may sit between an installment count and the amount.
+# Accented forms are spelled out because this module reads raw advert text.
+_CONNECTORS = r"(?:de|em|sem|s/|juros|no|nos|na|ate|at[eé]|vezes|cart[aã]o|cart[oõ]es|parcelas?)"
 
-# Appears after the amount in installment offers.
-_INSTALLMENT_SUFFIX = re.compile(r"^\s*(sem\s+juros|no\s+cart[ao][eo]?)", re.IGNORECASE)
+# 'Nx', 'N x', 'Nx de', 'em até Nx sem juros de', 'Nx no cartão de', 'parcelas de',
+# 'parcelado sem juros' — a count (or an explicit installment word) followed only by
+# connectors, immediately before the amount. The count is capped at two digits so that
+# a camera spec like 'Space Zoom 100x' is not read as an installment count.
+_INSTALLMENT_PREFIX = re.compile(
+    rf"(?:(?<!\d)\d{{1,2}}\s*x|parcelas?\s+de|parcelad[oa]s?)\s*(?:{_CONNECTORS}\s*)*$",
+    re.IGNORECASE,
+)
 
 _TRAILING_SEPARATORS = ".,"
 
@@ -50,6 +57,11 @@ def extract_price(text: str) -> tuple[float | None, str | None]:
     text immediately around it. The largest cash amount wins: an installment
     value is always smaller than the total it belongs to, so taking the maximum
     of the surviving candidates picks the total price.
+
+    Where phrasing is genuinely ambiguous (e.g. '12x sem juros R$ 3.050,00'),
+    classification errs toward rejecting the amount as an installment. A
+    rejection is recorded with its reason and stays auditable; an installment
+    accepted as a cash price silently corrupts the statistics.
     """
     cash: list[float] = []
     saw_installment = False
@@ -58,9 +70,8 @@ def extract_price(text: str) -> tuple[float | None, str | None]:
         value = _to_float(match.group(1))
         if value is None:
             continue
-        before = text[max(0, match.start() - 24) : match.start()]
-        after = text[match.end() : match.end() + 24]
-        if _INSTALLMENT_PREFIX.search(before) or _INSTALLMENT_SUFFIX.match(after):
+        before = text[max(0, match.start() - 40) : match.start()]
+        if _INSTALLMENT_PREFIX.search(before):
             saw_installment = True
             continue
         cash.append(value)
