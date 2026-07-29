@@ -3216,7 +3216,7 @@ min_raw and max_raw so the removal is auditable.
 import math
 from collections import Counter
 
-from renov_market_scan.models import Condition, Listing, ModelStats
+from renov_market_scan.models import Condition, Listing, ModelStats, SampleStatus
 
 # Below four points the quartiles carry no information and the IQR filter can
 # empty the sample, so it is not applied.
@@ -3256,7 +3256,9 @@ def iqr_bounds(values: list[float]) -> tuple[float, float] | None:
     return q1 - IQR_MULTIPLIER * spread, q3 + IQR_MULTIPLIER * spread
 
 
-def _status(count: int) -> str:
+def _status(count: int) -> SampleStatus:
+    """Sample-size status. Annotated with the Literal, not str, so that passing it
+    to ModelStats.status type-checks under mypy strict."""
     if count >= STATUS_OK_THRESHOLD:
         return "ok"
     if count >= STATUS_LOW_THRESHOLD:
