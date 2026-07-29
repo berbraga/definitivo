@@ -4051,7 +4051,7 @@ JOVI e ITEL, que a planilha lista como fabricantes independentes."
 
 **Interfaces:**
 - Consumes: `Query`, `Listing`, `RawResponse` da Tarefa 2.
-- Produces: `SearchOutcome` (dataclass frozen: `listings: list[Listing]`, `status: str`, `payload: dict[str, Any]`); `SearchAdapter` (Protocol com `async def search(self, query: Query) -> SearchOutcome`); `ErrorAction` (StrEnum: `RETRY`, `ACCEPT_PARTIAL`, `SHORTEN_QUERY`, `REDUCE_DOMAINS`, `FAIL`); `classify_tool_error(error_code: str) -> ErrorAction`; `STATUS_FOR_ERROR: dict[str, str]`; `FixtureAdapter`.
+- Produces: `SearchOutcome` (dataclass frozen: `listings: list[Listing]`, `status: str`, `payload: dict[str, Any]`); `SearchAdapter` (Protocol com `async def search(self, queries: list[Query]) -> SearchOutcome` — LISTA de queries, uma chamada por par (modelo, fonte) carregando todas as frases); `ErrorAction` (StrEnum: `RETRY`, `ACCEPT_PARTIAL`, `SHORTEN_QUERY`, `REDUCE_DOMAINS`, `FAIL`); `classify_tool_error(error_code: str) -> ErrorAction`; `STATUS_FOR_ERROR: dict[str, str]`; `status_for_error(error_code: str) -> str`; `STATUS_UNKNOWN_ERROR`; `FixtureAdapter`.
 
 - [ ] **Step 1: Escrever os testes que falham**
 
