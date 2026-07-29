@@ -3499,6 +3499,18 @@ def test_resaving_listings_for_a_key_replaces_the_previous_set(tmp_path):
     conn.close()
 
 
+def test_the_row_key_comes_from_the_arguments_not_the_listing(tmp_path):
+    """If the insert used the listing's own key, clearing k1 would leave a row
+    nothing can ever delete."""
+    conn = open_store(tmp_path / "scan.sqlite")
+    save_listings(conn, "k1", "olx", DAY, [make_listing(search_key="OTHER")])
+    loaded = load_listings(conn, DAY)
+    assert set(loaded) == {"k1"}
+    save_listings(conn, "k1", "olx", DAY, [])
+    assert load_listings(conn, DAY) == {}
+    conn.close()
+
+
 def test_a_none_price_survives_the_round_trip(tmp_path):
     conn = open_store(tmp_path / "scan.sqlite")
     save_listings(conn, "k1", "olx", DAY, [make_listing(price_brl=None)])
@@ -3629,7 +3641,12 @@ def save_listings(
     collected_on: str,
     listings: list[Listing],
 ) -> None:
-    """Replace the extracted listings for one (key, source, day)."""
+    """Replace the extracted listings for one (key, source, day).
+
+    Key columns (search_key, source) come from the function parameters, not from
+    the listing objects, so the DELETE and INSERT operate on the same row identity.
+    This prevents orphaned rows when a listing's own key differs from the arguments.
+    """
     connection.execute(
         "DELETE FROM listing WHERE search_key = ? AND source = ? AND collected_on = ?",
         (search_key, source, collected_on),
@@ -3641,8 +3658,8 @@ def save_listings(
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (
-                item.search_key,
-                item.source,
+                search_key,
+                source,
                 collected_on,
                 item.title,
                 item.price_brl,
@@ -3688,7 +3705,7 @@ def load_listings(connection: sqlite3.Connection, collected_on: str) -> dict[str
 - [ ] **Step 5: Rodar o teste e confirmar que passa**
 
 Run: `uv run pytest tests/test_store.py -v`
-Expected: PASS, 9 testes
+Expected: PASS, 10 testes
 
 - [ ] **Step 6: Rodar lint, type check e a suíte inteira, depois commit**
 
