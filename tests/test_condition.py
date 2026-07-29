@@ -39,3 +39,20 @@ def test_new_wins_over_used_when_both_appear():
 
 def test_seminovo_wins_over_usado():
     assert classify_condition("iPhone 13 seminovo, pouco usado") == "seminovo"
+
+
+def test_bare_novo_token_is_recognized():
+    """Bare 'novo' token (not 'novo na caixa' or similar) is detected when present."""
+    assert classify_condition("iPhone 13 128GB novo, nunca usado") == "novo"
+    assert classify_condition("iPhone 13 novo") == "novo"
+
+
+def test_bare_novo_token_does_not_swallow_seminovo():
+    """The bare 'novo' token must be checked after seminovo markers.
+
+    'Semi Novo' splits into ['semi', 'novo'] tokens, and 'novo' alone is the last
+    step of the precedence. If bare 'novo' were checked first, 'semi novo' would
+    be misread as new instead of seminovo.
+    """
+    assert classify_condition("iPhone 13 Semi Novo 128gb") == "seminovo"
+    assert classify_condition("iPhone 13 128gb seminovo, pouco usado") == "seminovo"

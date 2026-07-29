@@ -51,8 +51,8 @@ HARD_TERMS: tuple[str, ...] = (
 # present the term is describing the phone's condition or spec, not a part.
 CONTEXTUAL_TERMS: dict[str, tuple[str, ...]] = {
     "bateria": ("saude", "%", "capacidade", "ciclos", "health"),
-    "tela": ("polegada", "polegadas", "amoled", "oled", "hz", "trincada", "quebrada"),
-    "display": ("polegada", "polegadas", "amoled", "oled", "hz"),
+    "tela": ("polegada", "polegadas", "hz", "trincada", "quebrada"),
+    "display": ("polegada", "polegadas", "hz"),
 }
 
 

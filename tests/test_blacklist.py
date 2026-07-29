@@ -63,6 +63,11 @@ def test_a_screen_being_sold_is_caught():
     assert is_contextual_part("Display Galaxy A17 com aro") is True
 
 
+def test_amoled_screen_is_caught_as_a_part():
+    """An amoled screen sold as a part must not be exempted just for naming its panel technology."""
+    assert is_contextual_part("Tela Amoled Original Galaxy A17 128GB") is True
+
+
 def test_clean_titles_pass_both_rules():
     title = "Samsung Galaxy A17 5G 128GB usado excelente estado"
     assert is_hard_blacklisted(title) is False
