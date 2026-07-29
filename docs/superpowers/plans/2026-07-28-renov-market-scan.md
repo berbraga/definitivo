@@ -3814,7 +3814,7 @@ def test_only_enabled_sources_are_used_by_default():
     assert {source.name for source in selected} == {"olx", "enjoei", "mercadolivre"}
 
 
-def test_explicit_selection_overrides_the_default_but_not_the_disabled_flag():
+def test_explicit_selection_replaces_the_default_list():
     sources = load_sources(Path("fontes.yaml"))
     selected = enabled_sources(sources, ["olx"])
     assert [source.name for source in selected] == ["olx"]
