@@ -86,18 +86,15 @@ def test_suspicious_storage_becomes_an_anomaly_and_is_not_searched():
     assert anomalies[0].raw_value == "1288"
 
 
-def test_suspicious_storage_still_appears_in_the_full_listing():
-    """active_only=False is a full listing: the anomaly is still recorded, but
-    the row also shows up in the plan (keyed off its raw, suspicious label) so
-    the count reflects every distinct unit present in the sheet. Measured
-    against the real Android sheet: 88 suspicious rows collapse to 87 distinct
-    keys (two rows share manufacturer/model/raw-"1"), and 944 valid rows plus
-    those 87 give the verified total of 1031.
+def test_suspicious_storage_is_excluded_from_the_full_listing_too():
+    """A suspicious row is never searched, in either mode: it would carry a
+    nonsensical storage_gb (1, 1288 or 0), produce a query no real listing can
+    match, and still cost money to search. active_only=False widens the batch
+    to inactive-but-valid devices, not to rows whose capacity is known-corrupt.
     """
     rows = [make_row(storage_raw="1288", price_instore=400.0)]
     plan, anomalies = build_search_plan(rows, active_only=False)
-    assert len(plan) == 1
-    assert plan[0].storage_label == "1288"
+    assert plan == []
     assert len(anomalies) == 1
 
 

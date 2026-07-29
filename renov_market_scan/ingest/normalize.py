@@ -80,14 +80,12 @@ def build_search_plan(
                     status="revisao_humana",
                 )
             )
-            # active_only=True is the operational plan (what actually gets
-            # searched): suspicious storage is always excluded from it. In
-            # the full "todos" listing (active_only=False) the row still
-            # shows up as its own plan entry (keyed off its raw, suspicious
-            # label) alongside the Anomaly, so the full-listing count
-            # reflects every distinct unit in the sheet.
-            if active_only:
-                continue
+            # Suspicious storage is never searched, in either mode: a plan
+            # item built from it would carry a nonsensical storage_gb (1,
+            # 1288 or 0), generate a query no real listing can match, and
+            # still cost money to search. It stays out of the plan and only
+            # lives on in the anomalies list.
+            continue
 
         key = compute_search_key(row.manufacturer, row.model, storage.label)
         report_key = ReportKey(
