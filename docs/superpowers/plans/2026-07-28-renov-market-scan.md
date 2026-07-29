@@ -2473,9 +2473,24 @@ This is the defence for the minimum and maximum, which are the two numbers the
 report exists to produce and the two most exposed to a fabricated value.
 """
 
+import re
+
 from renov_market_scan.filtering.text import digit_signature
 
 PRICE_WITHOUT_EVIDENCE = "preco_sem_evidencia"
+
+# Only currency-marked amounts count as evidence of a price. A bare number in
+# advert text is as likely to be a sales count, a date or a phone fragment — the
+# same reason filtering/price.py requires the R$ marker when parsing. Each amount
+# is signed on its own, because concatenating every digit in the text would let an
+# unrelated run contain the price and pass as evidence for it.
+# Note: a citation stating the price with no currency marker at all (e.g., "Vendo por 3050")
+# is rejected and the listing is discarded with PRICE_WITHOUT_EVIDENCE. That is the
+# safe direction, since accepting it would mean trusting the model's number with no
+# independent check.
+_MONEY_NUMBER = re.compile(
+    r"(?:r\$\s*(\d[\d.,]*))|(?:(\d[\d.,]*)\s*reais)", re.IGNORECASE
+)
 
 
 def _candidate_signatures(price_brl: float) -> set[str]:
@@ -2492,23 +2507,29 @@ def _candidate_signatures(price_brl: float) -> set[str]:
 
 
 def price_has_evidence(price_brl: float, evidence_texts: list[str]) -> bool:
-    """True when the price's digits appear in at least one evidence text."""
+    """True when some number written in an evidence text is exactly this price."""
     signatures = _candidate_signatures(price_brl)
     if not signatures:
         return False
-    for text in evidence_texts:
-        haystack = digit_signature(text)
-        if not haystack:
-            continue
-        if any(signature in haystack for signature in signatures):
-            return True
-    return False
+    return any(
+        digit_signature(match.group(1) or match.group(2)) in signatures
+        for text in evidence_texts
+        for match in _MONEY_NUMBER.finditer(text)
+    )
 ```
+
+Cada numero e assinado separadamente, e o casamento e por IGUALDADE, nao por conter.
+Concatenar todos os digitos do texto apagaria a fronteira entre numeros, e ai um
+telefone ou um preco maior serviriam de evidencia para preco que nao esta la:
+`["iPhone 13 128GB R$ 2.800,00 zap 11930501234"]` e `["R$ 13.050,00"]` davam evidencia
+para 3050. O marcador de moeda fecha o resto: `["3050 unidades vendidas"]` nao e preco.
+Falso aceite anula a regra, porque ela existe para o min e o max nao dependerem da
+palavra do modelo.
 
 - [ ] **Step 4: Rodar o teste de evidência e confirmar que passa**
 
 Run: `uv run pytest tests/test_evidence.py -v`
-Expected: PASS, 6 testes
+Expected: PASS, 8 testes
 
 - [ ] **Step 5: Escrever o teste de dedupe que falha**
 
@@ -2623,7 +2644,7 @@ def canonical_url(url: str) -> str:
     kept = [(name, value) for name, value in parse_qsl(parts.query) if not _is_tracking(name)]
     path = parts.path.rstrip("/")
     return urlunsplit(
-        (parts.scheme.lower(), parts.netloc.lower(), path, urlencode(kept), "")
+        (parts.scheme.lower(), parts.netloc.lower(), path, urlencode(sorted(kept)), "")
     )
 
 
@@ -2650,7 +2671,7 @@ def dedupe(listings: list[Listing]) -> tuple[list[Listing], list[Listing]]:
 - [ ] **Step 8: Rodar o teste de dedupe e confirmar que passa**
 
 Run: `uv run pytest tests/test_dedupe.py -v`
-Expected: PASS, 9 testes
+Expected: PASS, 10 testes
 
 - [ ] **Step 9: Rodar lint, type check e a suíte inteira**
 
