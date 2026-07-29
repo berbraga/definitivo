@@ -1,0 +1,23 @@
+# Fontes de busca. Medido na Fase 0: OLX foi a que mais devolveu anuncio
+# individual com preco no proprio titulo.
+- name: olx
+  domain: olx.com.br
+  weight: 1.0
+  enabled: true
+- name: enjoei
+  domain: enjoei.com.br
+  weight: 1.0
+  enabled: true
+- name: mercadolivre
+  domain: mercadolivre.com.br
+  weight: 1.0
+  enabled: true
+# Fora da v1. Habilitar exige recalibrar as regras de descarte.
+- name: trocafone
+  domain: trocafone.com
+  weight: 0.5
+  enabled: false
+- name: shopee
+  domain: shopee.com.br
+  weight: 0.5
+  enabled: false
