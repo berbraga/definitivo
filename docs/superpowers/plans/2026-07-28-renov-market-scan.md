@@ -2809,11 +2809,19 @@ def test_new_is_included_when_requested():
     assert accepted[0].condition == "novo"
 
 
-def test_unknown_condition_is_excluded_by_default():
+def test_unknown_condition_is_kept_because_most_titles_omit_it():
+    """A title with no condition word must stay in the sample.
+
+    The advert measured in Phase 0 — 'iPhone 13 128GB Branco Saude de bateria 90%
+    R$ 3.050,00' — names no condition, and it is the norm rather than the
+    exception. Excluding 'desconhecido' would discard most real listings and bias
+    what survives toward sellers who happen to write 'usado'. Only 'novo' is
+    excluded by default, because a sealed unit is a different market.
+    """
     text = "iPhone 13 128GB Branco R$ 3.050,00"
     accepted, rejected = run_pipeline([make_listing(title=text, cited_text=text)], CONTEXT)
-    assert accepted == []
-    assert reasons(rejected) == ["condicao_excluida"]
+    assert len(accepted) == 1, reasons(rejected)
+    assert accepted[0].condition == "desconhecido"
 
 
 def test_installment_only_is_rejected():
@@ -2923,7 +2931,11 @@ CONDITION_EXCLUDED = "condicao_excluida"
 PRICE_OUT_OF_RANGE = "preco_fora_de_faixa"
 CAPACITY_MISSING = "capacidade_ausente"
 
-ACCEPTED_CONDITIONS: frozenset[str] = frozenset({"seminovo", "usado"})
+# 'desconhecido' is accepted: most real advert titles state no condition at all,
+# and excluding them would discard the bulk of the sample and bias what survives
+# toward sellers who happen to write 'usado'. Only 'novo' is excluded by default,
+# because a sealed unit prices as a different market.
+ACCEPTED_CONDITIONS: frozenset[str] = frozenset({"seminovo", "usado", "desconhecido"})
 
 
 @dataclass(frozen=True)
@@ -2971,7 +2983,7 @@ def run_pipeline(
         condition = classify_condition(listing.title)
         allowed = set(ACCEPTED_CONDITIONS)
         if context.include_new:
-            allowed |= {"novo", "desconhecido"}
+            allowed |= {"novo"}
         if condition not in allowed:
             rejected.append(RejectedListing(listing=listing, reason=CONDITION_EXCLUDED))
             continue
