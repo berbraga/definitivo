@@ -67,7 +67,12 @@ def save_listings(
     collected_on: str,
     listings: list[Listing],
 ) -> None:
-    """Replace the extracted listings for one (key, source, day)."""
+    """Replace the extracted listings for one (key, source, day).
+
+    Key columns (search_key, source) come from the function parameters, not from
+    the listing objects, so the DELETE and INSERT operate on the same row identity.
+    This prevents orphaned rows when a listing's own key differs from the arguments.
+    """
     connection.execute(
         "DELETE FROM listing WHERE search_key = ? AND source = ? AND collected_on = ?",
         (search_key, source, collected_on),
@@ -79,8 +84,8 @@ def save_listings(
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (
-                item.search_key,
-                item.source,
+                search_key,
+                source,
                 collected_on,
                 item.title,
                 item.price_brl,

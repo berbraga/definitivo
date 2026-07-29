@@ -124,3 +124,15 @@ def test_a_none_price_survives_the_round_trip(tmp_path):
     loaded = load_listings(conn, DAY)
     assert loaded["k1"][0].price_brl is None
     conn.close()
+
+
+def test_the_row_key_comes_from_the_arguments_not_the_listing(tmp_path):
+    """If the insert used the listing's own key, clearing k1 would leave a row
+    nothing can ever delete."""
+    conn = open_store(tmp_path / "scan.sqlite")
+    save_listings(conn, "k1", "olx", DAY, [make_listing(search_key="OTHER")])
+    loaded = load_listings(conn, DAY)
+    assert set(loaded) == {"k1"}
+    save_listings(conn, "k1", "olx", DAY, [])
+    assert load_listings(conn, DAY) == {}
+    conn.close()
