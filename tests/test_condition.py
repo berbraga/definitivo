@@ -1,0 +1,41 @@
+from renov_market_scan.filtering.condition import classify_condition
+
+
+def test_new_is_detected():
+    for title in (
+        "iPhone 13 128GB lacrado na caixa",
+        "iPhone 13 novo na caixa nota fiscal",
+        "Galaxy A17 128gb NOVO LACRADO",
+    ):
+        assert classify_condition(title) == "novo", title
+
+
+def test_semi_new_is_detected():
+    for title in (
+        "iPhone 13 128GB seminovo",
+        "iPhone 13 Semi Novo 128gb",
+        "Galaxy S23 vitrine 256gb",
+        "iPhone 12 recondicionado 64gb",
+    ):
+        assert classify_condition(title) == "seminovo", title
+
+
+def test_used_is_detected():
+    for title in (
+        "iPhone 13 128GB usado",
+        "Galaxy A17 usado excelente estado",
+    ):
+        assert classify_condition(title) == "usado", title
+
+
+def test_unknown_when_nothing_says_so():
+    assert classify_condition("iPhone 13 128GB Branco R$ 3.050,00") == "desconhecido"
+
+
+def test_new_wins_over_used_when_both_appear():
+    """'novo na caixa' plus 'usado' in the same title: lacrado is decisive."""
+    assert classify_condition("iPhone 13 lacrado, aceito seu usado na troca") == "novo"
+
+
+def test_seminovo_wins_over_usado():
+    assert classify_condition("iPhone 13 seminovo, pouco usado") == "seminovo"
