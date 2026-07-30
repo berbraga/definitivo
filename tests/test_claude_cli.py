@@ -39,3 +39,22 @@ def test_child_env_removes_api_key_variables(monkeypatch):
     assert "ANTHROPIC_API_KEY" not in env
     assert "ANTHROPIC_AUTH_TOKEN" not in env
     assert env["SOME_OTHER_VAR"] == "keep-me"
+
+
+def test_extract_json_parses_a_plain_object():
+    from renov_market_scan.collect.claude_cli import extract_json
+    result = extract_json('{"anuncios": []}')
+    assert result == {"anuncios": []}
+
+
+def test_extract_json_strips_a_markdown_fence():
+    from renov_market_scan.collect.claude_cli import extract_json
+    fenced = '```json\n{"anuncios": [{"titulo": "x"}]}\n```'
+    result = extract_json(fenced)
+    assert result == {"anuncios": [{"titulo": "x"}]}
+
+
+def test_extract_json_raises_on_no_json_found():
+    from renov_market_scan.collect.claude_cli import extract_json
+    with pytest.raises(ValueError):
+        extract_json("no json here at all")

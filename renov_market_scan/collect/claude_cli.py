@@ -9,9 +9,12 @@ read — not an API-verified citation. The Messages API's citation mechanism
 evidence strength relative to AnthropicSearchAdapter.
 """
 
+import json
 import os
+import re
 import shutil
 import subprocess
+from typing import Any
 
 PLAN_LIMIT_PATTERNS: tuple[str, ...] = ("usage limit", "rate limit", "try again")
 
@@ -44,3 +47,19 @@ def preflight() -> None:
             "  Servidor sem navegador: gere o token numa maquina com navegador\n"
             "  com 'claude setup-token' e exporte CLAUDE_CODE_OAUTH_TOKEN."
         )
+
+
+def extract_json(text: str) -> dict[str, Any]:
+    """Parse the model's JSON answer, tolerating a markdown fence around it.
+
+    The model is instructed to answer with bare JSON but sometimes wraps it
+    in ```json ... ``` anyway.
+    """
+    stripped = text.strip()
+    fence = re.search(r"```(?:json)?\s*(.+?)```", stripped, re.DOTALL)
+    if fence:
+        stripped = fence.group(1).strip()
+    start, end = stripped.find("{"), stripped.rfind("}")
+    if start == -1 or end == -1:
+        raise ValueError(f"resposta sem JSON reconhecivel: {stripped[:300]}")
+    return dict(json.loads(stripped[start : end + 1]))
