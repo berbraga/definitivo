@@ -9,12 +9,20 @@ read — not an API-verified citation. The Messages API's citation mechanism
 evidence strength relative to AnthropicSearchAdapter.
 """
 
+import asyncio
 import json
 import os
 import re
 import shutil
 import subprocess
+from datetime import UTC, datetime
 from typing import Any
+
+from pydantic import BaseModel, ValidationError
+
+from renov_market_scan.collect.base import SearchOutcome
+from renov_market_scan.config import Settings
+from renov_market_scan.models import Condition, Listing, Query
 
 PLAN_LIMIT_PATTERNS: tuple[str, ...] = ("usage limit", "rate limit", "try again")
 
@@ -63,3 +71,152 @@ def extract_json(text: str) -> dict[str, Any]:
     if start == -1 or end == -1:
         raise ValueError(f"resposta sem JSON reconhecivel: {stripped[:300]}")
     return dict(json.loads(stripped[start : end + 1]))
+
+
+STATUS_OK = "ok"
+STATUS_PARSE_ERROR = "parse_error"
+STATUS_SUBPROCESS_ERROR = "erro_subprocess"
+STATUS_PLAN_LIMIT = "limite_de_plano"
+
+SUBPROCESS_TIMEOUT_S = 900
+
+VALID_CONDITIONS: frozenset[str] = frozenset({"novo", "seminovo", "usado", "desconhecido"})
+
+SEARCH_PROMPT_TEMPLATE = (
+    "Voce e um coletor de referencia de precos de celulares seminovos no "
+    "Brasil.\n\n"
+    "Use WebSearch (e WebFetch apenas quando precisar confirmar o preco na "
+    "pagina) para encontrar anuncios de aparelhos USADOS ou SEMINOVOS a "
+    "venda no dominio {domain}, usando estas frases de busca: {phrases}.\n\n"
+    "REGRAS DE ACEITE DE ANUNCIO (aplicar antes de incluir):\n"
+    "1. Descarte acessorios e pecas: capa, capinha, case, pelicula, vidro, "
+    "tela, display, touch, bateria, placa, flex, conector, carcaca, aro, "
+    "tampa, camera, alto-falante, botao, carregador, fone, cabo, chip, "
+    'suporte, "para retirada", "nao liga", replica, clone, similar.\n'
+    "2. Preco A VISTA. Rejeite valor precedido de \"12x\", \"10 x\", \"sem "
+    "juros\". Converta \"R$ 1.234,56\" para 1234.56 (numero, ponto decimal).\n"
+    "3. Descarte \"novo\"/\"lacrado\". Aceite: seminovo, usado, vitrine, "
+    "recondicionado.\n\n"
+    "RESPONDA APENAS COM JSON, sem markdown, sem code fence, sem preambulo:\n"
+    '{{"anuncios":[{{"titulo":"...","preco_brl":1234.56,"condicao":"usado",'
+    '"url":"https://...","fonte":"...",'
+    '"cited_text":"trecho verbatim do texto que evidencia o preco"}}]}}\n\n'
+    "Se nao achar nada valido, devolva \"anuncios\": []. Nao calcule "
+    "mediana, minimo ou maximo. Nao faca perguntas."
+)
+
+
+class ExtractedListing(BaseModel):
+    """One advert as reported by the model, before any filtering."""
+
+    titulo: str
+    preco_brl: float | None = None
+    condicao: str = "desconhecido"
+    url: str
+    fonte: str = ""
+    cited_text: str = ""
+
+
+class ExtractionPayload(BaseModel):
+    anuncios: list[ExtractedListing] = []
+
+
+def _normalize_condition(value: str) -> Condition:
+    lowered = value.strip().lower()
+    if lowered in VALID_CONDITIONS:
+        return lowered  # type: ignore[return-value]
+    return "desconhecido"
+
+
+def _classify_failure(stdout: str, stderr: str) -> str:
+    combined = (stdout + stderr).lower()
+    if any(pattern in combined for pattern in PLAN_LIMIT_PATTERNS):
+        return STATUS_PLAN_LIMIT
+    return STATUS_SUBPROCESS_ERROR
+
+
+class ClaudeCliAdapter:
+    """Search and extract by driving `claude -p` as a subprocess.
+
+    Serial by construction: no semaphore, settings.concurrency is ignored.
+    claude -p draws from the plan's shared 5h/weekly usage window, not a
+    per-token rate limit, so concurrent CLI processes risk exhausting that
+    window faster and interleaving sessions unpredictably.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        preflight()
+
+    async def search(self, queries: list[Query]) -> SearchOutcome:
+        if not queries:
+            return SearchOutcome(listings=[], status=STATUS_OK, payload={})
+        return await asyncio.to_thread(self._search_blocking, queries)
+
+    def _search_blocking(self, queries: list[Query]) -> SearchOutcome:
+        first = queries[0]
+        phrases = "; ".join(f'"{query.text}"' for query in queries)
+        prompt = SEARCH_PROMPT_TEMPLATE.format(domain=first.domain, phrases=phrases)
+
+        # No --max-turns: the installed CLI (2.1.220) does not expose that
+        # flag. See docs/superpowers/sdd/2026-07-30-claude-cli-adapter/
+        # cli-flags-findings.md for the confirmed `claude --help` output.
+        cmd = [
+            "claude", "-p",
+            "--output-format", "json",
+            "--allowedTools", "WebSearch,WebFetch",
+            "--model", self._settings.model,
+        ]
+
+        proc = subprocess.run(
+            cmd,
+            input=prompt,
+            env=child_env(),
+            capture_output=True,
+            text=True,
+            timeout=SUBPROCESS_TIMEOUT_S,
+        )
+
+        payload: dict[str, Any] = {
+            "returncode": proc.returncode,
+            "stdout_tail": proc.stdout[-2000:],
+            "stderr_tail": proc.stderr[-2000:],
+        }
+
+        if proc.returncode != 0:
+            status = _classify_failure(proc.stdout, proc.stderr)
+            return SearchOutcome(listings=[], status=status, payload=payload)
+
+        try:
+            envelope = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            return SearchOutcome(listings=[], status=STATUS_PARSE_ERROR, payload=payload)
+
+        if envelope.get("is_error"):
+            status = _classify_failure(str(envelope), "")
+            return SearchOutcome(listings=[], status=status, payload=payload)
+
+        payload["session_id"] = envelope.get("session_id")
+        payload["num_turns"] = envelope.get("num_turns")
+
+        try:
+            parsed = extract_json(envelope.get("result", ""))
+            extraction = ExtractionPayload.model_validate(parsed)
+        except (ValueError, ValidationError):
+            return SearchOutcome(listings=[], status=STATUS_PARSE_ERROR, payload=payload)
+
+        captured_at = datetime.now(UTC).isoformat()
+        listings = [
+            Listing(
+                search_key=first.search_key,
+                source=first.source,
+                title=item.titulo,
+                price_brl=item.preco_brl,
+                condition=_normalize_condition(item.condicao),
+                url=item.url,
+                captured_at=captured_at,
+                cited_text=item.cited_text,
+            )
+            for item in extraction.anuncios
+        ]
+        return SearchOutcome(listings=listings, status=STATUS_OK, payload=payload)

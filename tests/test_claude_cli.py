@@ -1,8 +1,12 @@
+import asyncio
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from renov_market_scan.collect.claude_cli import child_env, preflight
+from renov_market_scan.collect.claude_cli import ClaudeCliAdapter, child_env, preflight
+from renov_market_scan.config import Settings
+from renov_market_scan.models import Query
 
 
 def test_preflight_raises_when_claude_is_not_on_path():
@@ -59,3 +63,124 @@ def test_extract_json_raises_on_no_json_found():
     from renov_market_scan.collect.claude_cli import extract_json
     with pytest.raises(ValueError):
         extract_json("no json here at all")
+
+
+QUERY = Query(
+    search_key="k1",
+    source="olx",
+    domain="olx.com.br",
+    phrase_index=0,
+    text="apple iphone 13 128gb usado seminovo",
+)
+
+
+def make_settings(**overrides):
+    return Settings(**overrides)
+
+
+def fake_envelope(result_text: str, is_error: bool = False) -> str:
+    return json.dumps(
+        {"result": result_text, "session_id": "sess-1", "is_error": is_error, "num_turns": 3}
+    )
+
+
+VALID_RESULT = (
+    '{"anuncios": [{"titulo": "iPhone 13 128GB seminovo R$ 3.050,00", '
+    '"preco_brl": 3050.0, "condicao": "seminovo", '
+    '"url": "https://olx.com.br/a-1", "fonte": "olx", '
+    '"cited_text": "R$ 3.050,00 iPhone 13 seminovo"}]}'
+)
+
+
+def test_a_successful_call_yields_listings():
+    fake_proc = MagicMock(returncode=0, stdout=fake_envelope(VALID_RESULT), stderr="")
+    with (
+        patch("shutil.which", return_value="/usr/local/bin/claude"),
+        patch(
+            "subprocess.run",
+            side_effect=[
+                MagicMock(returncode=0, stdout="Logged in", stderr=""),  # preflight
+                fake_proc,  # the actual search call
+            ],
+        ),
+    ):
+        adapter = ClaudeCliAdapter(make_settings())
+        outcome = asyncio.run(adapter.search([QUERY]))
+    assert outcome.status == "ok"
+    assert len(outcome.listings) == 1
+    listing = outcome.listings[0]
+    assert listing.price_brl == 3050.0
+    assert listing.search_key == "k1"
+    assert listing.source == "olx"
+    assert listing.cited_text == "R$ 3.050,00 iPhone 13 seminovo"
+
+
+def test_invalid_json_in_the_result_is_a_parse_error():
+    fake_proc = MagicMock(returncode=0, stdout=fake_envelope("isto nao e json"), stderr="")
+    with (
+        patch("shutil.which", return_value="/usr/local/bin/claude"),
+        patch(
+            "subprocess.run",
+            side_effect=[
+                MagicMock(returncode=0, stdout="Logged in", stderr=""),
+                fake_proc,
+            ],
+        ),
+    ):
+        adapter = ClaudeCliAdapter(make_settings())
+        outcome = asyncio.run(adapter.search([QUERY]))
+    assert outcome.status == "parse_error"
+    assert outcome.listings == []
+
+
+def test_a_nonzero_exit_code_is_a_subprocess_error():
+    fake_proc = MagicMock(returncode=1, stdout="", stderr="something broke")
+    with (
+        patch("shutil.which", return_value="/usr/local/bin/claude"),
+        patch(
+            "subprocess.run",
+            side_effect=[
+                MagicMock(returncode=0, stdout="Logged in", stderr=""),
+                fake_proc,
+            ],
+        ),
+    ):
+        adapter = ClaudeCliAdapter(make_settings())
+        outcome = asyncio.run(adapter.search([QUERY]))
+    assert outcome.status == "erro_subprocess"
+    assert outcome.listings == []
+
+
+def test_a_recognized_plan_limit_message_is_classified_distinctly():
+    fake_proc = MagicMock(
+        returncode=1, stdout="", stderr="Error: usage limit reached, try again later"
+    )
+    with (
+        patch("shutil.which", return_value="/usr/local/bin/claude"),
+        patch(
+            "subprocess.run",
+            side_effect=[
+                MagicMock(returncode=0, stdout="Logged in", stderr=""),
+                fake_proc,
+            ],
+        ),
+    ):
+        adapter = ClaudeCliAdapter(make_settings())
+        outcome = asyncio.run(adapter.search([QUERY]))
+    assert outcome.status == "limite_de_plano"
+
+
+def test_an_empty_query_list_returns_ok_without_a_subprocess_call():
+    with (
+        patch("shutil.which", return_value="/usr/local/bin/claude"),
+        patch(
+            "subprocess.run",
+            return_value=MagicMock(returncode=0, stdout="Logged in", stderr=""),
+        ) as run_mock,
+    ):
+        adapter = ClaudeCliAdapter(make_settings())
+        outcome = asyncio.run(adapter.search([]))
+    assert outcome.status == "ok"
+    assert outcome.listings == []
+    # Only the preflight call happened, no search subprocess.
+    assert run_mock.call_count == 1
