@@ -1,6 +1,6 @@
 import pytest
 
-from renov_market_scan.config import Settings, validate_model_tool_pair
+from renov_market_scan.config import Settings
 
 
 def test_defaults_are_the_documented_ones():
@@ -41,3 +41,16 @@ def test_settings_validates_the_pair_on_construction():
             model="claude-haiku-4-5",
             web_search_tool_version="web_search_20260209",
         )
+
+
+def test_settings_no_longer_require_an_api_key():
+    settings = Settings()  # type: ignore[call-arg]
+    assert settings.model == "claude-sonnet-5"
+    assert settings.concurrency == 4
+
+
+def test_settings_has_no_api_key_field():
+    settings = Settings()  # type: ignore[call-arg]
+    assert not hasattr(settings, "anthropic_api_key")
+    assert not hasattr(settings, "web_search_tool_version")
+    assert not hasattr(settings, "max_uses_per_call")
