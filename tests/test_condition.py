@@ -16,6 +16,12 @@ def test_semi_new_is_detected():
         "iPhone 13 Semi Novo 128gb",
         "Galaxy S23 vitrine 256gb",
         "iPhone 12 recondicionado 64gb",
+        "iPhone 13 excelente recondicionado",
+        "Galaxy A17 muito bom",
+        "iPhone 13 aceitavel recondicionado",
+        "iPhone 13 Sou Como Novo 128gb",
+        "iPhone 13 Fui mais usado",
+        "iPhone 13 Tenho Minhas Marcas de Uso",
     ):
         assert classify_condition(title) == "seminovo", title
 

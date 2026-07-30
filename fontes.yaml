@@ -1,18 +1,35 @@
-# Fontes de busca. Medido na Fase 0: OLX foi a que mais devolveu anuncio
-# individual com preco no proprio titulo.
-- name: olx
-  domain: olx.com.br
-  weight: 1.0
-  enabled: true
-- name: enjoei
-  domain: enjoei.com.br
-  weight: 1.0
-  enabled: true
+# Fontes de busca v2: lojas especializadas + Mercado Livre.
+# OLX e Enjoei desabilitados (condicao heterogenea de particulares).
 - name: mercadolivre
   domain: mercadolivre.com.br
   weight: 1.0
   enabled: true
-# Fora da v1. Habilitar exige recalibrar as regras de descarte.
+- name: trocafy
+  domain: trocafy.com.br
+  weight: 1.0
+  enabled: true
+- name: rede_cell_store
+  domain: redecellstore.com.br
+  weight: 1.0
+  enabled: false
+- name: celular_seminovo_rede
+  domain: celularseminovo.redecellstore.com.br
+  weight: 1.0
+  enabled: false
+- name: cellularstore
+  domain: cellularstore.com.br
+  weight: 1.0
+  enabled: true
+# v1 — desabilitadas, mantidas para override explicito via --fontes
+- name: olx
+  domain: olx.com.br
+  weight: 1.0
+  enabled: false
+- name: enjoei
+  domain: enjoei.com.br
+  weight: 1.0
+  enabled: false
+# Fora da v2. Habilitar exige recalibrar as regras de descarte.
 - name: trocafone
   domain: trocafone.com
   weight: 0.5

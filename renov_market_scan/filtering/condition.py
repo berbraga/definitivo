@@ -43,6 +43,16 @@ SEMI_NEW_MARKERS: tuple[str, ...] = (
     "vitrine",
     "recondicionado",
     "refurbished",
+    # Mercado Livre recondicionado (frases compostas evitam "usado excelente estado")
+    "muito bom",
+    "excelente recondicionado",
+    "aceitavel recondicionado",
+    "bom estado recondicionado",
+    # Trocafy cosmetic grades
+    "sou como novo",
+    "fui mais usado",
+    "tenho minhas marcas",
+    "como novo de vitrine",
 )
 USED_MARKERS: tuple[str, ...] = ("usado", "usada", "de segunda mao")
 
