@@ -46,6 +46,18 @@ def test_ultra_is_rejected_for_a_plain_galaxy_target():
     assert result.matches is False
 
 
+def test_qualifier_mentioned_away_from_the_model_name_is_ignored():
+    title = "iPhone 13 128GB seminovo, aceito Pro Max na troca"
+    result = model_matches("APPLE", "IPHONE 13", title)
+    assert result.matches is True
+
+
+def test_qualifier_mentioned_away_does_not_satisfy_a_qualified_target():
+    title = "iPhone 13 128GB seminovo, aceito Pro Max na troca"
+    result = model_matches("APPLE", "IPHONE 13 PRO", title)
+    assert result.matches is False
+
+
 def test_exact_model_is_accepted():
     result = model_matches("APPLE", "IPHONE 13", "iPhone 13 128GB seminovo bateria 90%")
     assert result.matches is True

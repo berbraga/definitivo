@@ -70,6 +70,26 @@ def qualifiers_in(text: str) -> set[str]:
     return {token for token in _canonical(text).split() if token in QUALIFIERS}
 
 
+def _qualifiers_near(text: str, anchors: set[str]) -> set[str]:
+    """Qualifiers immediately adjacent to an anchor token.
+
+    A title's free text can mention an unrelated qualifier far from the
+    model name itself (an advert offering trade-ins: "aceito Pro Max na
+    troca"). Scoping the scan to tokens next to the model name's own core
+    tokens avoids reading that kind of mention as the advert's own model.
+    """
+    title_tokens = _canonical(text).split()
+    found: set[str] = set()
+    for index, token in enumerate(title_tokens):
+        if token not in QUALIFIERS:
+            continue
+        before = title_tokens[index - 1] if index > 0 else None
+        after = title_tokens[index + 1] if index + 1 < len(title_tokens) else None
+        if before in anchors or after in anchors:
+            found.add(token)
+    return found
+
+
 def years_in(text: str) -> set[str]:
     """Four-digit years in a plausible model-year range."""
     return {token for token in tokens(text) if _YEAR.match(token)}
@@ -94,18 +114,18 @@ def model_matches(manufacturer: str, model: str, title: str) -> MatchResult:
     write 'iPhone 13 128GB' with no 'Apple'. The domain filter and the query
     already constrain the brand.
     """
+    target_core = _core_tokens(model)
+    title_core = _core_tokens(title)
+    if not target_core.issubset(title_core):
+        return MatchResult(matches=False, reason=MODEL_MISMATCH)
+
     target_qualifiers = qualifiers_in(model)
-    title_qualifiers = qualifiers_in(title)
+    title_qualifiers = _qualifiers_near(title, target_core)
     if target_qualifiers != title_qualifiers:
         return MatchResult(matches=False, reason=MODEL_MISMATCH)
 
     target_years = years_in(model)
     if target_years and not target_years.issubset(years_in(title)):
-        return MatchResult(matches=False, reason=MODEL_MISMATCH)
-
-    target_core = _core_tokens(model)
-    title_core = _core_tokens(title)
-    if not target_core.issubset(title_core):
         return MatchResult(matches=False, reason=MODEL_MISMATCH)
 
     target_has_5g = TOLERATED_VARIANT in _canonical(model).split()

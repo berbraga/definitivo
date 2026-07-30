@@ -40,19 +40,27 @@ HARD_TERMS: tuple[str, ...] = (
     "clone",
     "similar",
     "generico",
-    "carregador",
-    "fone",
-    "cabo",
-    "chip",
-    "suporte",
 )
 
 # Ambiguous terms mapped to the markers that exempt them. If any marker is
 # present the term is describing the phone's condition or spec, not a part.
+#
+# 'chip', 'carregador', 'fone', 'cabo', 'capa', 'suporte' and 'vidro' moved
+# here from HARD_TERMS: a legitimate advert for the phone itself commonly
+# mentions them as an included accessory or a built-in feature ("Dual Chip",
+# "acompanha carregador original", "brinde: capinha e pelicula"), and a hard
+# reject discarded that whole advert instead of just noting the accessory.
 CONTEXTUAL_TERMS: dict[str, tuple[str, ...]] = {
     "bateria": ("saude", "%", "capacidade", "ciclos", "health"),
     "tela": ("polegada", "polegadas", "hz", "trincada", "quebrada"),
     "display": ("polegada", "polegadas", "hz"),
+    "chip": ("dual", "duplo", "nano", "esim"),
+    "carregador": ("acompanha", "brinde", "junto", "original", "na caixa", "incluso"),
+    "fone": ("acompanha", "brinde", "junto", "original", "na caixa", "incluso"),
+    "cabo": ("acompanha", "brinde", "junto", "original", "na caixa", "incluso"),
+    "capa": ("acompanha", "brinde", "junto", "de brinde", "incluso"),
+    "suporte": ("acompanha", "brinde", "junto", "incluso", "tecnico"),
+    "vidro": ("acompanha", "brinde", "junto", "incluso"),
 }
 
 

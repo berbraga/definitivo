@@ -4,13 +4,8 @@ from renov_market_scan.filtering.blacklist import is_contextual_part, is_hard_bl
 def test_accessories_are_rejected():
     for title in (
         "Capa capinha silicone iPhone 13",
-        "Pelicula de vidro 3D iPhone 13",
         "Película Cerâmica iPhone 13",
         "Carcaça traseira iPhone 13",
-        "Cabo carregador turbo 20W",
-        "Fone de ouvido para iPhone",
-        "Suporte veicular para celular",
-        "Chip TIM 5G",
     ):
         assert is_hard_blacklisted(title) is True, title
 
@@ -34,6 +29,28 @@ def test_parts_and_junk_are_rejected():
 def test_a_legitimate_advert_is_not_hard_blacklisted():
     title = "iPhone 13 128GB Branco Saude de bateria 90% R$ 3.050,00 | Loja Fisica |"
     assert is_hard_blacklisted(title) is False
+
+
+def test_bundled_accessory_mentions_are_exempt_from_the_contextual_rule():
+    for title in (
+        "iPhone 13 128GB Dual Chip",
+        "iPhone 13 128GB acompanha carregador original na caixa",
+        "iPhone 13 128GB acompanha fone e cabo originais",
+        "iPhone 13 128GB, brinde: capinha e pelicula de vidro",
+        "iPhone 13 128GB com suporte tecnico incluso",
+    ):
+        assert is_contextual_part(title) is False, title
+
+
+def test_accessory_sold_alone_is_still_caught_by_the_contextual_rule():
+    for title in (
+        "Cabo carregador turbo 20W",
+        "Fone de ouvido para iPhone",
+        "Suporte veicular para celular",
+        "Chip TIM 5G",
+        "Pelicula de vidro 3D iPhone 13",
+    ):
+        assert is_contextual_part(title) is True, title
 
 
 def test_battery_health_is_exempt_from_the_contextual_rule():
