@@ -136,9 +136,12 @@ async def _collect(
 ) -> int:
     """One adapter call per (item, source), carrying every phrase.
 
-    Calls run concurrently: the adapter's semaphore is what bounds them, so
-    awaiting each pair in sequence here would pin real concurrency at one and
-    make --concorrencia and the estimated runtime meaningless.
+    Fires every pair concurrently via asyncio.gather. Whether calls actually
+    execute concurrently is entirely up to the adapter implementation: this
+    function makes no serialization guarantee of its own and is adapter-
+    agnostic. An adapter that needs to bound or serialize its own work (e.g.
+    ClaudeCliAdapter, which serializes internally to respect the plan's
+    shared usage window) is responsible for doing so itself.
     """
     pairs: list[tuple[SearchPlanItem, Source]] = [
         (item, source) for item in plan for source in sources

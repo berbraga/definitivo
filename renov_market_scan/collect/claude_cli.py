@@ -138,20 +138,26 @@ def _classify_failure(stdout: str, stderr: str) -> str:
 class ClaudeCliAdapter:
     """Search and extract by driving `claude -p` as a subprocess.
 
-    Serial by construction: no semaphore, settings.concurrency is ignored.
-    claude -p draws from the plan's shared 5h/weekly usage window, not a
-    per-token rate limit, so concurrent CLI processes risk exhausting that
-    window faster and interleaving sessions unpredictably.
+    Serialized by an internal asyncio.Lock, regardless of how many concurrent
+    search() calls the caller fires. claude -p draws from the plan's shared
+    5h/weekly usage window, not a per-token rate limit, so concurrent CLI
+    processes risk exhausting that window faster and interleaving sessions
+    unpredictably. run.py fires every (item, source) pair concurrently via
+    asyncio.gather and makes no serialization guarantee of its own; this lock
+    is what actually keeps at most one `claude -p` subprocess running at a
+    time.
     """
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._lock = asyncio.Lock()  # serializes across concurrent search() calls
         preflight()
 
     async def search(self, queries: list[Query]) -> SearchOutcome:
         if not queries:
             return SearchOutcome(listings=[], status=STATUS_OK, payload={})
-        return await asyncio.to_thread(self._search_blocking, queries)
+        async with self._lock:
+            return await asyncio.to_thread(self._search_blocking, queries)
 
     def _search_blocking(self, queries: list[Query]) -> SearchOutcome:
         first = queries[0]

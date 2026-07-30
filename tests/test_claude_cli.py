@@ -1,6 +1,8 @@
 import asyncio
 import json
 import subprocess
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -202,3 +204,39 @@ def test_an_empty_query_list_returns_ok_without_a_subprocess_call():
     assert outcome.listings == []
     # Only the preflight call happened, no search subprocess.
     assert run_mock.call_count == 1
+
+
+def test_overlapping_search_calls_never_run_the_blocking_work_concurrently():
+    """Two search() coroutines fired together via asyncio.gather must still
+    execute their subprocess.run work one at a time. Without the internal
+    lock, asyncio.to_thread would dispatch both to the default thread pool
+    and they would genuinely overlap.
+    """
+    concurrent = 0
+    peak = 0
+    state_lock = threading.Lock()
+
+    def side_effect(cmd, **kwargs):
+        nonlocal concurrent, peak
+        if cmd[:2] == ["claude", "auth"]:
+            return MagicMock(returncode=0, stdout="Logged in", stderr="")
+        with state_lock:
+            concurrent += 1
+            peak = max(peak, concurrent)
+        time.sleep(0.05)  # gives a real window for overlap to occur if unlocked
+        with state_lock:
+            concurrent -= 1
+        return MagicMock(returncode=0, stdout=fake_envelope(VALID_RESULT), stderr="")
+
+    with (
+        patch("shutil.which", return_value="/usr/local/bin/claude"),
+        patch("subprocess.run", side_effect=side_effect),
+    ):
+        adapter = ClaudeCliAdapter(make_settings())
+
+        async def run_both() -> None:
+            await asyncio.gather(adapter.search([QUERY]), adapter.search([QUERY]))
+
+        asyncio.run(run_both())
+
+    assert peak == 1
