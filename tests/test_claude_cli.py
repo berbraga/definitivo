@@ -1,5 +1,4 @@
-import subprocess
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -7,9 +6,11 @@ from renov_market_scan.collect.claude_cli import child_env, preflight
 
 
 def test_preflight_raises_when_claude_is_not_on_path():
-    with patch("shutil.which", return_value=None):
-        with pytest.raises(RuntimeError, match="claude"):
-            preflight()
+    with (
+        patch("shutil.which", return_value=None),
+        pytest.raises(RuntimeError, match="claude"),
+    ):
+        preflight()
 
 
 def test_preflight_raises_when_auth_status_is_not_zero():
@@ -17,9 +18,9 @@ def test_preflight_raises_when_auth_status_is_not_zero():
     with (
         patch("shutil.which", return_value="/usr/local/bin/claude"),
         patch("subprocess.run", return_value=fake_result),
+        pytest.raises(RuntimeError, match="autenticado"),
     ):
-        with pytest.raises(RuntimeError, match="autenticado"):
-            preflight()
+        preflight()
 
 
 def test_preflight_passes_when_claude_is_present_and_authenticated():
