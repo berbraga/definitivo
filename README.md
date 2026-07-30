@@ -13,8 +13,41 @@ mediana e o valor máximo anunciados — cada extremo com o link do seu anúncio
 
 ```bash
 uv sync
-cp .env.example .env      # e preencha ANTHROPIC_API_KEY
+cp .env.example .env
 ```
+
+A coleta usa a sessao do Claude Code CLI, nao uma API key. Antes do primeiro
+uso, autentique o CLI — veja "Autenticacao" abaixo.
+
+## Autenticacao
+
+**Maquina com navegador** (time, uso local): instale o
+[Claude Code CLI](https://claude.com/claude-code), rode `claude` e faca
+`/login`. `renov-market-scan run` confere `claude auth status` antes de cada
+execucao e para com erro claro se a sessao expirou.
+
+**Servidor sem navegador**: gere um token de longa duracao numa maquina com
+navegador,
+
+```bash
+claude setup-token
+```
+
+e exporte `CLAUDE_CODE_OAUTH_TOKEN` no ambiente do servidor (nunca no
+`.env` do repositorio). `claude auth status` reconhece o token sem
+necessidade de `/login`.
+
+Em ambos os casos, `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` sao removidas
+do ambiente de todo subprocesso lancado pela ferramenta — se uma delas
+estiver definida, o CLI a usaria em vez da assinatura, cobrando por token
+sem avisar.
+
+### Notificacao no Slack
+
+Defina `SLACK_WEBHOOK_URL` (webhook incoming) para receber uma mensagem ao
+fim de cada rodada — sucesso (contagens e caminho do relatorio), falha
+(erro e onde esta o cache para retomar), ou interrupcao manual. Sem essa
+variavel, a notificacao e apenas pulada com um aviso no log.
 
 ## Uso
 
@@ -98,9 +131,13 @@ uv run renov-market-scan run --input Template-iPhone.xlsx --reprocessar-filtro
 
 ### Aba `Amostras`
 
-Todo anúncio aceito, com `cited_text` — o trecho verbatim que a API citou e que
-comprova o preço. É a evidência auditável de cada linha do Resumo.
-`flag_5g_divergente` marca quando o alvo e o anúncio divergem apenas no 5G.
+Todo anuncio aceito, com `cited_text` — o trecho que o modelo relata ter
+lido na pagina, evidenciando o preco. Note que isso e auto-relato do
+modelo, nao uma citacao verificada pela API (a assinatura do CLI nao expoe
+o mecanismo de citacoes criptografadas da Messages API). E a evidencia
+auditavel de cada linha do Resumo, com a garantia mais fraca dessa mudanca
+documentada aqui.
+`flag_5g_divergente` marca quando o alvo e o anuncio divergem apenas no 5G.
 
 ### Aba `Descartados`
 
@@ -150,5 +187,6 @@ uv run mypy renov_market_scan
 
 Nenhum teste toca a rede: a coleta em teste passa pelo `FixtureAdapter`.
 
-Design: `docs/superpowers/specs/2026-07-28-renov-market-scan-design.md`
+Design original: `docs/superpowers/specs/2026-07-28-renov-market-scan-design.md`
+Design do adapter via CLI: `docs/superpowers/specs/2026-07-30-claude-cli-adapter-design.md`
 Medições da Fase 0: `docs/fontes.md`
