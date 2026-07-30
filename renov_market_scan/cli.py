@@ -12,13 +12,13 @@ import typer
 from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 
-from renov_market_scan.collect.anthropic_search import AnthropicSearchAdapter
+from renov_market_scan.collect.claude_cli import ClaudeCliAdapter
 from renov_market_scan.config import Settings
-from renov_market_scan.cost import estimate, format_estimate
 from renov_market_scan.ingest.normalize import build_search_plan
 from renov_market_scan.ingest.reader import read_device_rows
+from renov_market_scan.notify import notify_slack
 from renov_market_scan.query.builder import enabled_sources, load_sources
-from renov_market_scan.run import SOURCES_FILE, RunOptions, execute
+from renov_market_scan.run import SOURCES_FILE, RunOptions, RunResult, execute
 
 app = typer.Typer(add_completion=False, help="Coletor de referencia de mercado de seminovos.")
 console = Console()
@@ -78,7 +78,7 @@ def run(
         console.print(f"[red]Arquivo de entrada nao encontrado:[/red] {input_path}")
         raise typer.Exit(code=2)
 
-    settings = Settings(concurrency=concorrencia)  # type: ignore[call-arg]
+    settings = Settings(concurrency=concorrencia)
     selected = [name.strip() for name in fontes.split(",")] if fontes else None
     sources = enabled_sources(load_sources(SOURCES_FILE), selected)
     if not sources:
@@ -98,9 +98,8 @@ def run(
     console.print(f"Anomalias:           {len(anomalies)}")
     console.print(f"Fontes:              {', '.join(source.name for source in sources)}")
     console.print(f"Modelo:              {settings.model}")
-    console.print(f"Web search tool:     {settings.web_search_tool_version}")
     console.print("")
-    console.print(format_estimate(estimate(plan, sources, settings)))
+    console.print(f"Pares (modelo x fonte): {len(plan) * len(sources)}")
 
     if dry_run:
         console.print("\n[green]--dry-run: nada foi gasto.[/green]")
@@ -125,9 +124,9 @@ def run(
         reprocess_only=reprocessar_filtro,
         collected_on=date.today().isoformat(),
     )
-    adapter = AnthropicSearchAdapter(settings)
+    adapter = ClaudeCliAdapter(settings)
 
-    async def _main() -> None:
+    async def _main() -> RunResult:
         loop = asyncio.get_running_loop()
 
         def _request_stop() -> None:
@@ -162,8 +161,27 @@ def run(
         console.print(f"Buscas realizadas: {result.searches_performed}")
         console.print(f"Anuncios aceitos:  {len(result.sample_rows)}")
         console.print(f"Descartados:       {len(result.discarded_rows)}")
+        return result
 
-    asyncio.run(_main())
+    try:
+        result = asyncio.run(_main())
+    except KeyboardInterrupt:
+        notify_slack(":warning: Rodada de referencia de mercado interrompida manualmente.")
+        raise
+    except Exception as exc:
+        notify_slack(f":rotating_light: Rodada de referencia de mercado ABORTOU: `{exc}`")
+        raise
+    else:
+        ok = sum(1 for row in result.summary_rows if row["status"] == "ok")
+        summary = (
+            f":bar_chart: *Referencia de mercado — {input_path.name}*\n"
+            f"• {len(result.summary_rows)} modelo(s), {result.searches_performed} busca(s)\n"
+            f"• {ok} com amostra boa, "
+            f"{len(result.summary_rows) - ok} com amostra fraca ou sem dados\n"
+            f"• {len(result.discarded_rows)} anuncio(s) descartado(s)\n"
+            f"• Arquivo: `{result.report_path}`"
+        )
+        notify_slack(summary)
 
 
 if __name__ == "__main__":
