@@ -96,6 +96,22 @@ def test_ratio_is_none_without_a_sheet_price():
     assert row["razao_mediana_vs_atual"] is None
 
 
+def test_ratio_is_none_for_a_non_positive_sheet_price():
+    keys = [
+        ReportKey(erp_code="X", model="IPHONE 13", storage_label="128GB",
+                  device_name="d", price_instore=-100.0, row_number=3)
+    ]
+    row = build_summary_rows([make_item(report_keys=keys)], {"k1": make_stats()}, DAY)[0]
+    assert row["razao_mediana_vs_atual"] is None
+
+    keys_zero = [
+        ReportKey(erp_code="X", model="IPHONE 13", storage_label="128GB",
+                  device_name="d", price_instore=0.0, row_number=3)
+    ]
+    row_zero = build_summary_rows([make_item(report_keys=keys_zero)], {"k1": make_stats()}, DAY)[0]
+    assert row_zero["razao_mediana_vs_atual"] is None
+
+
 def test_statistics_fan_out_to_every_report_key():
     keys = [
         ReportKey(erp_code="A", model="IPHONE 13", storage_label="128GB",
@@ -134,6 +150,22 @@ def test_discarded_rows_always_carry_a_reason():
     rows = build_discarded_rows([make_item()], {"k1": rejected})
     assert set(rows[0]) == set(DISCARDED_COLUMNS)
     assert rows[0]["motivo_descarte"] == "acessorio_ou_peca"
+
+
+def test_discarded_rows_fan_out_to_every_report_key():
+    """A discard on a search key shared by two report keys must credit both
+    ERP codes; otherwise the Descartados sheet would show the second code as
+    discard-free even though the same rejected listing applies to it too."""
+    keys = [
+        ReportKey(erp_code="A", model="IPHONE 13", storage_label="128GB",
+                  device_name="d1", price_instore=2000.0, row_number=3),
+        ReportKey(erp_code="B", model="IPHONE 13", storage_label="128GB",
+                  device_name="d2", price_instore=2000.0, row_number=4),
+    ]
+    rejected = [RejectedListing(listing=make_listing(), reason="acessorio_ou_peca")]
+    rows = build_discarded_rows([make_item(report_keys=keys)], {"k1": rejected})
+    assert {row["erp_code"] for row in rows} == {"A", "B"}
+    assert {row["motivo_descarte"] for row in rows} == {"acessorio_ou_peca"}
 
 
 def test_anomaly_rows_include_storage_and_empty_samples():
