@@ -12,7 +12,7 @@ DAY = "2026-07-28"
 
 
 def settings() -> Settings:
-    return Settings(anthropic_api_key="sk-test")
+    return Settings()
 
 
 def options(tmp_path: Path, source: Path, **overrides) -> RunOptions:
