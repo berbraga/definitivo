@@ -70,6 +70,19 @@ def test_links_are_written_as_clickable_formulas(tmp_path):
     workbook.close()
 
 
+def test_hyperlink_survives_a_semicolon_in_the_url(tmp_path):
+    summary = [{**SUMMARY[0], "link_minimo": "https://olx.com.br/x;jsessionid=abc"}]
+    path = tmp_path / "referencia.xlsx"
+    write_xlsx_report(path, summary, SAMPLES, DISCARDED, ANOMALIES, "2026-07-28")
+    workbook = load_workbook(path)
+    sheet = workbook["Resumo"]
+    header = [cell.value for cell in sheet[1]]
+    column = header.index("link_minimo") + 1
+    value = sheet.cell(row=2, column=column).value
+    assert value == '=HYPERLINK("https://olx.com.br/x;jsessionid=abc","abrir")'
+    workbook.close()
+
+
 def test_freeze_pane_and_autofilter_are_set(tmp_path):
     workbook = load_workbook(write(tmp_path))
     sheet = workbook["Resumo"]

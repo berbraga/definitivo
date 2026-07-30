@@ -41,9 +41,15 @@ MIN_COLUMN_WIDTH = 10
 
 
 def _hyperlink(url: str) -> str:
-    """A clickable cell. Quotes in the URL are escaped for the formula."""
+    """A clickable cell. Quotes in the URL are escaped for the formula.
+
+    Uses ',' as the argument separator: it is the canonical, locale-independent
+    OOXML separator for the <f> element. A ';' would be ambiguous with a ';'
+    that legally appears inside the URL itself (e.g. matrix parameters such as
+    ;jsessionid=...), risking a #NAME? error or a garbled link.
+    """
     safe = url.replace('"', '""')
-    return f'=HYPERLINK("{safe}";"abrir")'
+    return f'=HYPERLINK("{safe}","abrir")'
 
 
 def _write_sheet(sheet: Worksheet, columns: tuple[str, ...], rows: list[dict[str, Any]]) -> None:
@@ -95,6 +101,10 @@ def write_xlsx_report(
     if "razao_mediana_vs_atual" in SUMMARY_COLUMNS and summary_rows:
         index = SUMMARY_COLUMNS.index("razao_mediana_vs_atual") + 1
         letter = get_column_letter(index)
+        # Built directly from Rule/ColorScale/FormatObject rather than the
+        # ColorScaleRule() convenience factory: that factory is stubbed as an
+        # untyped function in openpyxl-stubs and fails mypy --strict
+        # (no-untyped-call). Do not "simplify" this back to ColorScaleRule().
         color_scale = ColorScale(
             cfvo=[
                 FormatObject(type="min"),
