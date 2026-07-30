@@ -5680,6 +5680,8 @@ from renov_market_scan.models import (
     SearchPlanItem,
 )
 
+# The {data} placeholder is left unformatted here; the workbook writer (Task 19)
+# fills it in when the sheet is rendered.
 FOOTNOTE = (
     "Valores de anuncio (preco pedido), nao de transacao. "
     "Amostra coletada em {data} - referencia de variacao de mercado, nao avaliacao."
@@ -5763,7 +5765,7 @@ def build_summary_rows(
         for key in item.report_keys:
             median = stats.median if stats else None
             ratio: float | None = None
-            if median is not None and key.price_instore:
+            if median is not None and key.price_instore is not None and key.price_instore > 0:
                 ratio = median / key.price_instore
             rows.append(
                 {
@@ -5825,22 +5827,27 @@ def build_sample_rows(
 def build_discarded_rows(
     plan_items: list[SearchPlanItem], rejected_by_key: dict[str, list[RejectedListing]]
 ) -> list[dict[str, Any]]:
-    """Every discard with its reason, for rule calibration."""
+    """Every discard with its reason, repeated per report key so the join is explicit.
+
+    Mirrors build_sample_rows: a search key that serves several report keys must
+    credit each of them with the discard, otherwise all but the first ERP code
+    look discard-free.
+    """
     rows: list[dict[str, Any]] = []
     for item in plan_items:
-        first_erp = item.report_keys[0].erp_code if item.report_keys else ""
         for rejected in rejected_by_key.get(item.search_key, []):
-            rows.append(
-                {
-                    "erp_code": first_erp,
-                    "fonte": rejected.listing.source,
-                    "titulo": rejected.listing.title,
-                    "preco": rejected.listing.price_brl,
-                    "url": rejected.listing.url,
-                    "motivo_descarte": rejected.reason,
-                    "cited_text": rejected.listing.cited_text,
-                }
-            )
+            for key in item.report_keys:
+                rows.append(
+                    {
+                        "erp_code": key.erp_code,
+                        "fonte": rejected.listing.source,
+                        "titulo": rejected.listing.title,
+                        "preco": rejected.listing.price_brl,
+                        "url": rejected.listing.url,
+                        "motivo_descarte": rejected.reason,
+                        "cited_text": rejected.listing.cited_text,
+                    }
+                )
     return rows
 
 
@@ -5866,6 +5873,12 @@ def build_anomaly_rows(
         stats = stats_by_key.get(item.search_key)
         if stats is not None and stats.n > 0:
             continue
+        # An anomaly and a "sem_amostra" row are independent facts and can, in
+        # principle, both name the same spreadsheet row. In the real pipeline
+        # this never happens: a row with suspicious storage is excluded from
+        # the search plan entirely (Task 4), so it never reaches plan_items
+        # and therefore cannot also produce "sem_amostra". The combination is
+        # only reachable from an artificially constructed input.
         for key in item.report_keys:
             rows.append(
                 {
@@ -5884,7 +5897,7 @@ def build_anomaly_rows(
 - [ ] **Step 4: Rodar o teste, lint, tipos e commit**
 
 Run: `uv run pytest tests/test_assemble.py -v && uv run ruff check . && uv run mypy renov_market_scan`
-Expected: PASS, 12 testes; sem erros
+Expected: PASS, 14 testes; sem erros
 
 ```bash
 git add renov_market_scan/report tests/test_assemble.py
