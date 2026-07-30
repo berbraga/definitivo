@@ -20,9 +20,11 @@ def notify_slack(text: str) -> None:
         print("[slack] SLACK_WEBHOOK_URL nao definida, pulando notificacao.", file=sys.stderr)
         return
     body = json.dumps({"text": text}).encode()
-    request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
     try:
+        request = urllib.request.Request(
+            url, data=body, headers={"Content-Type": "application/json"}
+        )
         with urllib.request.urlopen(request, timeout=15) as response:
             print(f"[slack] enviado ({response.status})", file=sys.stderr)
-    except urllib.error.URLError as exc:
+    except (urllib.error.URLError, OSError, ValueError) as exc:
         print(f"[slack] FALHOU: {exc}", file=sys.stderr)

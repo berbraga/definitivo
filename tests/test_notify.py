@@ -32,3 +32,18 @@ def test_notify_slack_never_raises_when_the_request_fails(monkeypatch):
         side_effect=urllib.error.URLError("connection refused"),
     ):
         notify_slack("hello")  # must not raise
+
+
+def test_notify_slack_never_raises_on_a_bare_timeout_error(monkeypatch):
+    # TimeoutError is NOT a subclass of urllib.error.URLError, so it must be
+    # caught separately (it is a subtype of OSError).
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.example/abc")
+    with patch("urllib.request.urlopen", side_effect=TimeoutError("timed out")):
+        notify_slack("hello")  # must not raise
+
+
+def test_notify_slack_never_raises_on_a_malformed_webhook_url(monkeypatch):
+    # A malformed URL raises ValueError out of Request(...) construction,
+    # which must happen inside the try block to be swallowed.
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "not a valid url with spaces")
+    notify_slack("hello")  # must not raise
