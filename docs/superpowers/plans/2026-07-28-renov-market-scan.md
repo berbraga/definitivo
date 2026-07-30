@@ -4560,11 +4560,20 @@ a Tarefa 16 implementa o mecanismo vencedor e a Tarefa 17 usa os numeros."
 
 **Interfaces:**
 - Consumes: `Settings` (T1), `Query`/`Listing` (T2), `SearchOutcome` (T14), `classify_tool_error`/`status_for_error`/`ErrorAction` (T14).
-- Produces: `ExtractedListing` (pydantic: `titulo: str`, `preco_brl: float | None`, `condicao: str`, `url: str`, `fonte: str`); `ExtractionPayload` (pydantic: `anuncios: list[ExtractedListing]`); `AnthropicSearchAdapter` com `async def search(self, query: Query) -> SearchOutcome`; `build_web_search_tool(settings: Settings, domain: str) -> dict[str, Any]`; `collect_evidence(content: list[Any]) -> list[str]`; `find_tool_error(content: list[Any]) -> str | None`; `MAX_PAUSE_RESUMES = 3`.
+- Produces: `ExtractedListing` (pydantic: `titulo: str`, `preco_brl: float | None`, `condicao: str`, `url: str`, `fonte: str`, `cited_text: str`); `ExtractionPayload` (pydantic: `anuncios: list[ExtractedListing]`); `AnthropicSearchAdapter` com `async def search(self, queries: list[Query]) -> SearchOutcome` — uma chamada de busca mais uma chamada de extração por par (modelo, fonte), não uma chamada só; `build_web_search_tool(settings: Settings, domain: str) -> dict[str, Any]`; `collect_evidence(content: list[Any]) -> list[str]`; `find_tool_error(content: list[Any]) -> str | None`; `MAX_PAUSE_RESUMES = 3`.
 
-**Escolha do mecanismo.** A Tarefa 15 registrou o vencedor em `docs/fontes.md`. Só a função `_request` muda; o resto do adapter é idêntico nos três casos. O código abaixo traz **B** como corpo concreto e as variantes **A** e **C** em seguida. Implemente a que o spike escolheu e apague as outras duas.
+**Escolha do mecanismo.** A Tarefa 15 registrou em `docs/fontes.md` um achado que invalida a decisão A/B/C original: forçar saída em JSON puro suprime citations por completo, porque citations só existem anexadas a bloco de texto livre. Nenhum dos três mecanismos isolados preserva citação — todos zeraram `citations` no spike.
 
-**Testes sem rede.** Um cliente falso (`FakeMessages`) devolve objetos com a mesma forma da resposta da API. Nenhum teste chama a API. O adapter recebe a **lista** de frases de um par (modelo, fonte) e faz uma única chamada, que é o que a estimativa de custo assume.
+O mecanismo real é **duas chamadas**:
+
+1. **Etapa de busca** — chamada normal com a tool de busca, sem `SYSTEM` restritivo, sem `output_config`, sem tool de registro. O modelo responde em texto livre, e as citações (`cited_text`, `title`, `url`) vêm anexadas aos blocos de texto normalmente.
+2. **Etapa de extração** — segunda chamada, **sem a tool de busca disponível**, que recebe o texto da etapa 1 (citações inclusas como contexto textual) e extrai o array JSON estruturado, com um campo `cited_text` por item preenchido com o trecho verbatim que evidencia o preço. Esta etapa usa o mecanismo **B** (JSON por prompt, validado com pydantic) — sem busca nova, é mais barata e não tem razão para usar A ou C.
+
+A etapa de extração deve remover uma eventual cerca de markdown (` ```json ... ``` `) antes de `json.loads`, porque o spike mostrou o modelo às vezes envolvendo a resposta assim mesmo quando instruído a não fazer.
+
+O código abaixo já reflete as duas etapas.
+
+**Testes sem rede.** Um cliente falso (`FakeMessages`) devolve objetos com a mesma forma da resposta da API. Nenhum teste chama a API. O adapter recebe a **lista** de frases de um par (modelo, fonte) e faz **duas** chamadas — busca em texto livre, depois extração sem tool de busca — o que a Tarefa 17 assume ao estimar o custo por par.
 
 - [ ] **Step 1: Escrever o teste que falha**
 
@@ -4695,9 +4704,23 @@ def test_no_tool_error_on_a_successful_result():
     assert find_tool_error([search_result_block()]) is None
 
 
+VALID_JSON_WITH_EVIDENCE = (
+    '{"anuncios": [{"titulo": "iPhone 13 128GB seminovo R$ 3.050,00", '
+    '"preco_brl": 3050.0, "condicao": "seminovo", '
+    '"url": "https://olx.com.br/a-1", "fonte": "olx", '
+    '"cited_text": "R$ 3.050,00 iPhone 13 seminovo"}]}'
+)
+
+
 def test_a_successful_search_yields_listings_with_evidence_attached():
+    """Two calls: stage 1 searches in free text (with a real citation), stage 2
+    extracts structured JSON with cited_text from that text — no new search."""
     client = FakeClient([
-        response([search_result_block(), text_block(VALID_JSON, [citation("R$ 3.050,00")])])
+        response([
+            search_result_block(),
+            text_block("iPhone 13 seminovo R$ 3.050,00", [citation("R$ 3.050,00")]),
+        ]),
+        response([text_block(VALID_JSON_WITH_EVIDENCE)]),
     ])
     adapter = AnthropicSearchAdapter(make_settings(), client=client)
     outcome = asyncio.run(adapter.search([QUERY]))
@@ -4708,12 +4731,18 @@ def test_a_successful_search_yields_listings_with_evidence_attached():
     assert listing.search_key == "k1"
     assert listing.source == "olx"
     assert "3.050,00" in listing.cited_text
+    assert len(client.messages.calls) == 2
+    # Stage 2 gets no search tool, so it can never spend a web_search_request.
+    assert "tools" not in client.messages.calls[1]
 
 
 def test_the_raw_payload_is_json_serializable():
     import json
 
-    client = FakeClient([response([text_block(VALID_JSON)])])
+    client = FakeClient([
+        response([text_block("busca livre")]),
+        response([text_block(VALID_JSON_WITH_EVIDENCE)]),
+    ])
     adapter = AnthropicSearchAdapter(make_settings(), client=client)
     outcome = asyncio.run(adapter.search([QUERY]))
     assert json.dumps(outcome.payload)
@@ -4722,7 +4751,9 @@ def test_the_raw_payload_is_json_serializable():
 
 
 def test_invalid_json_is_retried_once_then_marked_parse_error():
+    """The retry happens within stage 2, on top of a completed stage 1."""
     client = FakeClient([
+        response([text_block("busca livre")]),
         response([text_block("isto nao e json")]),
         response([text_block("ainda nao e json")]),
     ])
@@ -4730,13 +4761,27 @@ def test_invalid_json_is_retried_once_then_marked_parse_error():
     outcome = asyncio.run(adapter.search([QUERY]))
     assert outcome.status == "parse_error"
     assert outcome.listings == []
-    assert len(client.messages.calls) == 2
+    assert len(client.messages.calls) == 3
 
 
 def test_invalid_json_recovered_by_the_retry_is_accepted():
     client = FakeClient([
+        response([text_block("busca livre")]),
         response([text_block("isto nao e json")]),
-        response([text_block(VALID_JSON)]),
+        response([text_block(VALID_JSON_WITH_EVIDENCE)]),
+    ])
+    adapter = AnthropicSearchAdapter(make_settings(), client=client)
+    outcome = asyncio.run(adapter.search([QUERY]))
+    assert outcome.status == "ok"
+    assert len(outcome.listings) == 1
+
+
+def test_a_markdown_fence_around_the_json_is_stripped():
+    """The spike showed the model sometimes wraps the answer in ```json anyway."""
+    fenced = "```json\n" + VALID_JSON_WITH_EVIDENCE + "\n```"
+    client = FakeClient([
+        response([text_block("busca livre")]),
+        response([text_block(fenced)]),
     ])
     adapter = AnthropicSearchAdapter(make_settings(), client=client)
     outcome = asyncio.run(adapter.search([QUERY]))
@@ -4747,6 +4792,7 @@ def test_invalid_json_recovered_by_the_retry_is_accepted():
 def test_never_uses_eval_or_regex_on_malformed_json():
     """A payload that eval would happily execute must not be executed."""
     client = FakeClient([
+        response([text_block("busca livre")]),
         response([text_block("__import__('os').system('echo boom')")]),
         response([text_block("__import__('os').system('echo boom')")]),
     ])
@@ -4757,7 +4803,8 @@ def test_never_uses_eval_or_regex_on_malformed_json():
 
 def test_max_uses_exceeded_accepts_the_partial_result():
     client = FakeClient([
-        response([search_result_block("max_uses_exceeded"), text_block(VALID_JSON)])
+        response([search_result_block("max_uses_exceeded"), text_block("resultado parcial")]),
+        response([text_block(VALID_JSON_WITH_EVIDENCE)]),
     ])
     adapter = AnthropicSearchAdapter(make_settings(), client=client)
     outcome = asyncio.run(adapter.search([QUERY]))
@@ -4766,6 +4813,7 @@ def test_max_uses_exceeded_accepts_the_partial_result():
 
 
 def test_invalid_tool_input_fails_without_retry():
+    """A stage-1 tool error stops the pipeline before stage 2 ever runs."""
     client = FakeClient([response([search_result_block("invalid_tool_input")])])
     adapter = AnthropicSearchAdapter(make_settings(), client=client)
     outcome = asyncio.run(adapter.search([QUERY]))
@@ -4775,14 +4823,16 @@ def test_invalid_tool_input_fails_without_retry():
 
 
 def test_pause_turn_is_resumed_by_resending_the_assistant_message():
+    """pause_turn belongs to stage 1; the resume is stage 1's own retry, not stage 2."""
     client = FakeClient([
         response([text_block("parcial")], stop_reason="pause_turn"),
-        response([text_block(VALID_JSON)]),
+        response([text_block("busca completa")]),
+        response([text_block(VALID_JSON_WITH_EVIDENCE)]),
     ])
     adapter = AnthropicSearchAdapter(make_settings(), client=client)
     outcome = asyncio.run(adapter.search([QUERY]))
     assert outcome.status == "ok"
-    assert len(client.messages.calls) == 2
+    assert len(client.messages.calls) == 3
     resumed = client.messages.calls[1]["messages"]
     assert resumed[-1]["role"] == "assistant"
 
@@ -4804,7 +4854,10 @@ def test_refusal_is_recorded_without_retry():
 
 
 def test_an_empty_result_list_is_ok_not_an_error():
-    client = FakeClient([response([text_block('{"anuncios": []}')])])
+    client = FakeClient([
+        response([text_block("busca sem resultados")]),
+        response([text_block('{"anuncios": []}')]),
+    ])
     adapter = AnthropicSearchAdapter(make_settings(), client=client)
     outcome = asyncio.run(adapter.search([QUERY]))
     assert outcome.status == "ok"
@@ -4833,14 +4886,19 @@ Expected: FAIL com `ModuleNotFoundError`
 - [ ] **Step 3: Implementar `renov_market_scan/collect/anthropic_search.py`**
 
 ```python
-"""Production adapter: one messages.create per (search key, source).
+"""Production adapter: two messages.create calls per (search key, source).
 
-Two facts about the API shape this module. First, search errors arrive inside a
-successful HTTP 200 response as a web_search_tool_result_error block, so retry
-policy is driven by that block and not by an exception. Second, the client never
-receives search-result text: only URLs, titles, encrypted content, and up to 150
-verbatim characters per citation. Those citations are collected here and travel
-on the listing so the evidence rule can verify the price downstream.
+Three facts about the API shape this module. First, search errors arrive
+inside a successful HTTP 200 response as a web_search_tool_result_error
+block, so retry policy is driven by that block and not by an exception.
+Second, the client never receives search-result text: only URLs, titles,
+encrypted content, and up to 150 verbatim characters per citation. Third,
+forcing JSON-only output suppresses citations entirely, since citations only
+attach to free-text blocks (measured in the Task 15 spike) — so extraction
+cannot happen in the same call as the search. Stage one searches freely and
+keeps its citations; stage two, with no search tool available, turns that
+free text into structured JSON with a verbatim cited_text per item, which the
+evidence rule verifies downstream.
 """
 
 import asyncio
@@ -4867,12 +4925,20 @@ STATUS_PAUSE_EXCEEDED = "pausa_excedida"
 
 VALID_CONDITIONS: frozenset[str] = frozenset({"novo", "seminovo", "usado", "desconhecido"})
 
-SYSTEM_PROMPT = (
-    "Voce extrai anuncios de celulares usados de resultados de busca. "
-    "Responda apenas com um objeto JSON no formato "
-    '{"anuncios": [{"titulo","preco_brl","condicao","url","fonte"}]}. '
-    "Use o titulo do anuncio exatamente como aparece no resultado. "
-    "Nunca invente preco: se o preco nao aparecer no resultado, use null. "
+SEARCH_PROMPT_TEMPLATE = (
+    "Busque anuncios de celular usado ou seminovo usando estas frases de "
+    "busca, nesta ordem: {phrases}. "
+    "Considere apenas resultados do dominio {domain}. "
+    "Descreva cada anuncio individual encontrado, sem repetir URLs, "
+    "incluindo titulo, preco pedido, condicao e link."
+)
+
+EXTRACTION_SYSTEM_PROMPT = (
+    "A partir do texto de busca abaixo, extraia um array JSON de objetos "
+    'no formato {"anuncios": [{"titulo","preco_brl","condicao","url","fonte","cited_text"}]}. '
+    "Preencha cited_text com o trecho exato (verbatim) do texto que evidencia o preco. "
+    "Use o titulo do anuncio exatamente como aparece no texto. "
+    "Nunca invente preco: se o preco nao aparecer no texto, use null. "
     "Nunca use valor de parcela como preco. "
     "Sem preambulo, sem markdown, sem texto fora do JSON."
 )
@@ -4891,12 +4957,41 @@ class ExtractedListing(BaseModel):
     condicao: str = "desconhecido"
     url: str
     fonte: str = ""
+    cited_text: str = ""
 
 
 class ExtractionPayload(BaseModel):
     """The model's whole answer."""
 
     anuncios: list[ExtractedListing] = []
+
+
+def _strip_markdown_fence(text: str) -> str:
+    """Drop a ```json ... ``` wrapper the model sometimes adds despite instructions."""
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    without_open = stripped.split("\n", 1)[1] if "\n" in stripped else ""
+    return without_open.rsplit("```", 1)[0].strip()
+
+
+def _search_text_and_evidence(content: list[Any]) -> tuple[str, list[str]]:
+    """The search stage's free text plus every citation attached to it.
+
+    Citations only attach to free-text blocks, so this must run against the
+    search-stage response, before any JSON-only extraction step.
+    """
+    parts: list[str] = []
+    evidence: list[str] = []
+    for block in content:
+        if getattr(block, "type", None) != "text":
+            continue
+        parts.append(block.text)
+        for cite in getattr(block, "citations", None) or []:
+            cited_text = getattr(cite, "cited_text", None)
+            if cited_text:
+                evidence.append(str(cited_text))
+    return "\n".join(parts), evidence
 
 
 class TransientAPIError(Exception):
@@ -5020,16 +5115,28 @@ class AnthropicSearchAdapter:
         stop=stop_after_attempt(4),
         reraise=False,
     )
-    def _call(self, messages: list[dict[str, Any]], tool: dict[str, Any]) -> Any:
-        """One API call, retried by tenacity on transient failures."""
+    def _call(
+        self,
+        messages: list[dict[str, Any]],
+        tool: dict[str, Any] | None,
+        system: str | None = None,
+    ) -> Any:
+        """One API call, retried by tenacity on transient failures.
+
+        tool=None omits `tools` entirely, so the extraction stage cannot spend
+        a web_search_request even if the model wanted to.
+        """
+        kwargs: dict[str, Any] = {
+            "model": self._settings.model,
+            "max_tokens": MAX_OUTPUT_TOKENS,
+            "messages": messages,
+        }
+        if system is not None:
+            kwargs["system"] = system
+        if tool is not None:
+            kwargs["tools"] = [tool]
         try:
-            return self._client.messages.create(
-                model=self._settings.model,
-                max_tokens=MAX_OUTPUT_TOKENS,
-                system=SYSTEM_PROMPT,
-                tools=[tool],
-                messages=messages,
-            )
+            return self._client.messages.create(**kwargs)
         except anthropic.RateLimitError as error:
             raise TransientAPIError(str(error)) from error
         except anthropic.APIStatusError as error:
@@ -5043,15 +5150,13 @@ class AnthropicSearchAdapter:
         first = queries[0]
         tool = build_web_search_tool(self._settings, first.domain)
         phrases = "; ".join(f'"{query.text}"' for query in queries)
-        prompt = (
-            "Busque anuncios de celular usado ou seminovo usando estas frases de "
-            f"busca, nesta ordem: {phrases}. "
-            f"Considere apenas resultados do dominio {first.domain}. "
-            "Extraia cada anuncio individual encontrado, sem repetir URLs."
-        )
-        messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+        search_prompt = SEARCH_PROMPT_TEMPLATE.format(phrases=phrases, domain=first.domain)
+        messages: list[dict[str, Any]] = [{"role": "user", "content": search_prompt}]
 
-        response = self._call(messages, tool)
+        # Stage 1: free-text search. No output_config, no SYSTEM restricting
+        # to JSON — that would suppress citations, since citations only
+        # attach to free-text blocks (measured in the Task 15 spike).
+        response = self._call(messages, tool=tool)
         payload = _to_jsonable(response)
 
         # A paused turn is resumed by resending the assistant message unchanged.
@@ -5061,10 +5166,10 @@ class AnthropicSearchAdapter:
                 return SearchOutcome(listings=[], status=STATUS_PAUSE_EXCEEDED, payload=payload)
             resumes += 1
             messages = [
-                {"role": "user", "content": prompt},
+                {"role": "user", "content": search_prompt},
                 {"role": "assistant", "content": response.content},
             ]
-            response = self._call(messages, tool)
+            response = self._call(messages, tool=tool)
             payload = _to_jsonable(response)
 
         if getattr(response, "stop_reason", None) == "refusal":
@@ -5080,22 +5185,15 @@ class AnthropicSearchAdapter:
             if action is not ErrorAction.ACCEPT_PARTIAL:
                 return SearchOutcome(listings=[], status=status, payload=payload)
 
-        extracted = self._parse(content)
-        if extracted is None:
-            # One correction attempt, then give up. Never eval, never regex.
-            messages = [
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": _response_text(content) or "(vazio)"},
-                {"role": "user", "content": CORRECTION_PROMPT},
-            ]
-            response = self._call(messages, tool)
-            payload = _to_jsonable(response)
-            content = list(getattr(response, "content", []))
-            extracted = self._parse(content)
-            if extracted is None:
-                return SearchOutcome(listings=[], status=STATUS_PARSE_ERROR, payload=payload)
+        search_text, evidence = _search_text_and_evidence(content)
 
-        evidence = collect_evidence(content)
+        # Stage 2: extraction. No search tool available, no new web_search_
+        # requests spent — this call only turns stage 1's free text (with its
+        # citations already inlined as plain text) into structured JSON.
+        extracted = self._extract(search_text)
+        if extracted is None:
+            return SearchOutcome(listings=[], status=STATUS_PARSE_ERROR, payload=payload)
+
         joined_evidence = " | ".join(evidence)
         captured_at = datetime.now(UTC).isoformat()
 
@@ -5108,15 +5206,36 @@ class AnthropicSearchAdapter:
                 condition=_normalize_condition(item.condicao),
                 url=item.url,
                 captured_at=captured_at,
-                cited_text=joined_evidence,
+                cited_text=item.cited_text or joined_evidence,
             )
             for item in extracted.anuncios
         ]
         return SearchOutcome(listings=listings, status=status, payload=payload)
 
+    def _extract(self, search_text: str) -> ExtractionPayload | None:
+        """Stage 2: turn stage 1's free text into structured JSON.
+
+        No tool is passed here — this call never searches, it only reads the
+        text stage 1 already produced. One correction attempt on invalid
+        JSON, then give up. Never eval, never regex on the result.
+        """
+        messages: list[dict[str, Any]] = [{"role": "user", "content": search_text}]
+        response = self._call(messages, tool=None, system=EXTRACTION_SYSTEM_PROMPT)
+        parsed = self._parse(list(getattr(response, "content", [])))
+        if parsed is not None:
+            return parsed
+
+        messages = [
+            {"role": "user", "content": search_text},
+            {"role": "assistant", "content": response.content},
+            {"role": "user", "content": CORRECTION_PROMPT},
+        ]
+        response = self._call(messages, tool=None, system=EXTRACTION_SYSTEM_PROMPT)
+        return self._parse(list(getattr(response, "content", [])))
+
     def _parse(self, content: list[Any]) -> ExtractionPayload | None:
         """Validate the model's JSON. Returns None when it cannot be trusted."""
-        text = _response_text(content).strip()
+        text = _strip_markdown_fence(_response_text(content))
         if not text:
             return None
         try:
@@ -5129,85 +5248,27 @@ class AnthropicSearchAdapter:
             return None
 ```
 
-- [ ] **Step 4: Se o spike escolheu A, substituir `_call` por esta variante**
-
-```python
-    LISTING_SCHEMA: dict[str, Any] = {
-        "type": "object",
-        "properties": {
-            "anuncios": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "titulo": {"type": "string"},
-                        "preco_brl": {"type": ["number", "null"]},
-                        "condicao": {"type": "string"},
-                        "url": {"type": "string"},
-                        "fonte": {"type": "string"},
-                    },
-                    "required": ["titulo", "preco_brl", "condicao", "url", "fonte"],
-                    "additionalProperties": False,
-                },
-            }
-        },
-        "required": ["anuncios"],
-        "additionalProperties": False,
-    }
-
-    # Inside _call, add to messages.create:
-    #     output_config={"format": {"type": "json_schema", "schema": self.LISTING_SCHEMA}},
-```
-
-Com A, o retry de correção deixa de ser alcançável na prática, mas continua no código como rede de segurança. Nenhum teste muda.
-
-- [ ] **Step 5: Se o spike escolheu C, substituir `_parse` e `_call` por esta variante**
-
-```python
-    RECORD_TOOL: dict[str, Any] = {
-        "name": "registrar_anuncios",
-        "description": "Registra os anuncios encontrados na busca.",
-        "strict": True,
-        "input_schema": LISTING_SCHEMA,  # same schema as variant A
-    }
-
-    # In _call, send both tools: tools=[tool, self.RECORD_TOOL]
-    # And replace _parse with:
-    def _parse(self, content: list[Any]) -> ExtractionPayload | None:
-        """Read the strict tool call instead of free text."""
-        for block in content:
-            if getattr(block, "type", None) != "tool_use":
-                continue
-            if getattr(block, "name", None) != "registrar_anuncios":
-                continue
-            try:
-                return ExtractionPayload.model_validate(block.input)
-            except ValidationError:
-                return None
-        return None
-```
-
-Com C, o teste `test_invalid_json_is_retried_once_then_marked_parse_error` precisa passar `tool_use` blocks em vez de texto. Ajustar o helper `text_block` para um `tool_use_block(payload)` nesses três testes.
-
-- [ ] **Step 6: Rodar o teste e confirmar que passa**
+- [ ] **Step 4: Rodar o teste e confirmar que passa**
 
 Run: `uv run pytest tests/test_anthropic_search.py -v`
-Expected: PASS, 17 testes
+Expected: PASS, 18 testes
 
-- [ ] **Step 7: Rodar lint, type check e a suíte inteira, depois commit**
+- [ ] **Step 5: Rodar lint, type check e a suíte inteira, depois commit**
 
 Run: `uv run ruff check . && uv run mypy renov_market_scan && uv run pytest`
 
 ```bash
 git add renov_market_scan/collect/anthropic_search.py tests/test_anthropic_search.py
-git commit -m "feat: adapter da API com web search tool
+git commit -m "feat: adapter da API com web search tool em duas etapas
 
-Cliente com max_retries=0 e tenacity como unica politica de retry. Erro
-de busca vem em HTTP 200 e e tratado pelo bloco, nao por excecao.
-pause_turn e retomado reenviando a mensagem do assistente intacta, com
-teto de 3. cited_text das citations viaja no listing para a regra de
-evidencia poder verificar o preco. JSON invalido tem 1 retry de correcao
-e depois parse_error; nunca eval, nunca regex."
+Etapa de busca em texto livre preserva citations (JSON puro as suprime,
+medido no spike da Tarefa 15); etapa de extracao separada, sem tool de
+busca, converte o texto em JSON estruturado com cited_text verbatim por
+item. Cliente com max_retries=0 e tenacity como unica politica de
+retry. Erro de busca vem em HTTP 200 e e tratado pelo bloco, nao por
+excecao. pause_turn e retomado reenviando a mensagem do assistente
+intacta, com teto de 3. JSON invalido tem 1 retry de correcao e depois
+parse_error; nunca eval, nunca regex."
 ```
 
 ---
@@ -5220,9 +5281,11 @@ e depois parse_error; nunca eval, nunca regex."
 
 **Interfaces:**
 - Consumes: `Settings` (T1), `SearchPlanItem` (T2), `Source`/`PHRASE_COUNT` (T13).
-- Produces: `Calibration` (dataclass frozen: `tokens_in_per_call: int`, `tokens_out_per_call: int`, `searches_per_call: float`); `CALIBRATION_FROM_SPIKE: Calibration`; `CostEstimate` (dataclass frozen: `calls: int`, `searches_expected: float`, `searches_ceiling: int`, `search_cost_usd: float`, `token_cost_usd: float`, `total_usd: float`, `ceiling_usd: float`, `minutes: float`); `PRICE_PER_SEARCH_USD = 0.01`; `MODEL_PRICES_PER_MTOK: dict[str, tuple[float, float]]`; `estimate(plan_items, sources, settings, calibration=CALIBRATION_FROM_SPIKE) -> CostEstimate`; `format_estimate(estimate: CostEstimate) -> str`.
+- Produces: `Calibration` (dataclass frozen: `search_tokens_in: int`, `search_tokens_out: int`, `extraction_tokens_in: int`, `extraction_tokens_out: int`, `searches_per_call: float`); `CALIBRATION_FROM_SPIKE: Calibration`; `CostEstimate` (dataclass frozen: `pairs: int`, `calls: int`, `searches_expected: float`, `searches_ceiling: int`, `search_cost_usd: float`, `token_cost_usd: float`, `total_usd: float`, `ceiling_usd: float`, `minutes: float`); `PRICE_PER_SEARCH_USD = 0.01`; `MODEL_PRICES_PER_MTOK: dict[str, tuple[float, float]]`; `estimate(plan_items, sources, settings, calibration=CALIBRATION_FROM_SPIKE) -> CostEstimate`; `format_estimate(estimate: CostEstimate) -> str`.
 
-**Os três números de `CALIBRATION_FROM_SPIKE` vêm da Tarefa 15**, seção "Calibração do estimador de custo" de `docs/fontes.md`. Substituir os valores abaixo pelos medidos.
+**Duas chamadas por par, não uma.** A Tarefa 16 faz uma chamada de busca (com tool) e uma chamada de extração separada (sem tool), porque a Tarefa 15 mediu que forçar JSON puro na mesma chamada suprime citations. `pairs` conta (modelo × fonte); `calls` é `pairs * 2`. O custo de busca só nasce na chamada de busca; o custo de tokens soma as duas chamadas com seus tokens próprios, porque a etapa de extração tem um perfil de tokens bem diferente (entrada menor, sem custo de busca) da etapa de busca.
+
+**Os números de `CALIBRATION_FROM_SPIKE` vêm da Tarefa 15**, seção "Calibração do estimador de custo" de `docs/fontes.md`. Substituir os valores abaixo pelos medidos: `search_tokens_in`/`search_tokens_out` são `TOKENS_IN_PER_CALL`/`TOKENS_OUT_PER_CALL` da etapa de busca; `extraction_tokens_in`/`extraction_tokens_out` são os tokens medidos na etapa de extração (chamada separada, sem busca).
 
 - [ ] **Step 1: Escrever o teste que falha**
 
@@ -5239,7 +5302,13 @@ from renov_market_scan.models import ReportKey, SearchPlanItem
 from renov_market_scan.query.builder import Source
 from renov_market_scan.config import Settings
 
-CALIBRATION = Calibration(tokens_in_per_call=12000, tokens_out_per_call=900, searches_per_call=2.0)
+CALIBRATION = Calibration(
+    search_tokens_in=12000,
+    search_tokens_out=900,
+    extraction_tokens_in=2500,
+    extraction_tokens_out=1000,
+    searches_per_call=2.0,
+)
 SOURCES = [
     Source(name="olx", domain="olx.com.br"),
     Source(name="enjoei", domain="enjoei.com.br"),
@@ -5270,9 +5339,10 @@ def settings() -> Settings:
     return Settings(anthropic_api_key="sk-test")
 
 
-def test_call_count_is_items_times_sources():
+def test_pair_and_call_count_is_items_times_sources_times_two():
     result = estimate(make_items(10), SOURCES, settings(), CALIBRATION)
-    assert result.calls == 30
+    assert result.pairs == 30
+    assert result.calls == 60
 
 
 def test_ceiling_uses_max_uses_per_call():
@@ -5286,11 +5356,12 @@ def test_search_cost_is_a_cent_per_search():
     assert result.search_cost_usd == 30 * 2.0 * PRICE_PER_SEARCH_USD
 
 
-def test_token_cost_uses_the_model_price():
+def test_token_cost_uses_the_model_price_and_sums_both_stages():
     result = estimate(make_items(1), SOURCES, settings(), CALIBRATION)
-    # 3 calls, Sonnet 5 introductory pricing: 2.00 in / 10.00 out per MTok.
-    expected_in = 3 * 12000 / 1_000_000 * 2.00
-    expected_out = 3 * 900 / 1_000_000 * 10.00
+    # 3 pairs, Sonnet 5 introductory pricing: 2.00 in / 10.00 out per MTok.
+    # Each pair spends search tokens AND extraction tokens (separate calls).
+    expected_in = 3 * (12000 + 2500) / 1_000_000 * 2.00
+    expected_out = 3 * (900 + 1000) / 1_000_000 * 10.00
     assert abs(result.token_cost_usd - (expected_in + expected_out)) < 1e-9
 
 
@@ -5307,13 +5378,15 @@ def test_ceiling_is_never_below_the_total():
 def test_the_android_active_batch_matches_the_spec_order_of_magnitude():
     """285 active models, 3 sources: the search fee floor is US$ 25.65 at ceiling."""
     result = estimate(make_items(285), SOURCES, settings(), CALIBRATION)
-    assert result.calls == 855
+    assert result.pairs == 855
+    assert result.calls == 1710
     assert result.searches_ceiling == 2565
     assert abs(result.searches_ceiling * PRICE_PER_SEARCH_USD - 25.65) < 1e-9
 
 
 def test_an_empty_plan_costs_nothing():
     result = estimate([], SOURCES, settings(), CALIBRATION)
+    assert result.pairs == 0
     assert result.calls == 0
     assert result.total_usd == 0.0
 
@@ -5374,17 +5447,29 @@ SECONDS_PER_CALL = 12.0
 
 @dataclass(frozen=True)
 class Calibration:
-    """Per-call figures measured by the Task 15 spike."""
+    """Per-pair figures measured by the Task 15 spike.
 
-    tokens_in_per_call: int
-    tokens_out_per_call: int
+    A pair costs two calls: a search call (with the search tool, which is
+    what spends web_search_requests) and a separate extraction call (no
+    tool, different token profile). Kept apart because forcing JSON-only
+    output in the same call as the search suppresses citations entirely
+    (measured in the spike) — merging their token counts into one number
+    would hide that a real run always pays for two distinct calls.
+    """
+
+    search_tokens_in: int
+    search_tokens_out: int
+    extraction_tokens_in: int
+    extraction_tokens_out: int
     searches_per_call: float
 
 
 # Replace with the values recorded in docs/fontes.md by Task 15.
 CALIBRATION_FROM_SPIKE = Calibration(
-    tokens_in_per_call=12000,
-    tokens_out_per_call=900,
+    search_tokens_in=12000,
+    search_tokens_out=900,
+    extraction_tokens_in=2500,
+    extraction_tokens_out=1000,
     searches_per_call=2.0,
 )
 
@@ -5393,6 +5478,7 @@ CALIBRATION_FROM_SPIKE = Calibration(
 class CostEstimate:
     """What a run is expected to cost, and the worst case."""
 
+    pairs: int
     calls: int
     searches_expected: float
     searches_ceiling: int
@@ -5411,18 +5497,21 @@ def estimate(
 ) -> CostEstimate:
     """Estimate the cost of collecting this plan from these sources.
 
-    Both phrases of a (model, source) pair travel in one call, so the call count
-    is items times sources, and the search ceiling is that times max_uses.
+    Both phrases of a (model, source) pair travel in the search call, so the
+    pair count is items times sources. Each pair costs two calls — search,
+    then extraction — so the search ceiling (which only the search call can
+    spend) is pairs times max_uses, while token cost sums both calls' own
+    token counts.
     """
-    calls = len(plan_items) * len(sources)
-    searches_expected = calls * calibration.searches_per_call
-    searches_ceiling = calls * settings.max_uses_per_call
+    pairs = len(plan_items) * len(sources)
+    calls = pairs * 2
+    searches_expected = pairs * calibration.searches_per_call
+    searches_ceiling = pairs * settings.max_uses_per_call
 
     price_in, price_out = MODEL_PRICES_PER_MTOK.get(settings.model, FALLBACK_PRICE_PER_MTOK)
-    token_cost = (
-        calls * calibration.tokens_in_per_call / 1_000_000 * price_in
-        + calls * calibration.tokens_out_per_call / 1_000_000 * price_out
-    )
+    tokens_in = pairs * (calibration.search_tokens_in + calibration.extraction_tokens_in)
+    tokens_out = pairs * (calibration.search_tokens_out + calibration.extraction_tokens_out)
+    token_cost = tokens_in / 1_000_000 * price_in + tokens_out / 1_000_000 * price_out
     search_cost = searches_expected * PRICE_PER_SEARCH_USD
     ceiling_cost = searches_ceiling * PRICE_PER_SEARCH_USD + token_cost
 
@@ -5430,6 +5519,7 @@ def estimate(
     minutes = calls * SECONDS_PER_CALL / concurrency / 60.0
 
     return CostEstimate(
+        pairs=pairs,
         calls=calls,
         searches_expected=searches_expected,
         searches_ceiling=searches_ceiling,
@@ -5444,6 +5534,7 @@ def estimate(
 def format_estimate(estimate_result: CostEstimate) -> str:
     """Human-readable pt-BR summary for the dry-run output."""
     return (
+        f"Pares (modelo x fonte): {estimate_result.pairs}\n"
         f"Chamadas a API:      {estimate_result.calls}\n"
         f"Frases por chamada:  {PHRASE_COUNT}\n"
         f"Buscas esperadas:    {estimate_result.searches_expected:.0f}\n"
