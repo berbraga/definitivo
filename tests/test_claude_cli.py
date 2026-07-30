@@ -1,5 +1,6 @@
 import asyncio
 import json
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -168,6 +169,23 @@ def test_a_recognized_plan_limit_message_is_classified_distinctly():
         adapter = ClaudeCliAdapter(make_settings())
         outcome = asyncio.run(adapter.search([QUERY]))
     assert outcome.status == "limite_de_plano"
+
+
+def test_a_timeout_is_a_subprocess_error():
+    with (
+        patch("shutil.which", return_value="/usr/local/bin/claude"),
+        patch(
+            "subprocess.run",
+            side_effect=[
+                MagicMock(returncode=0, stdout="Logged in", stderr=""),
+                subprocess.TimeoutExpired(cmd=["claude"], timeout=900),
+            ],
+        ),
+    ):
+        adapter = ClaudeCliAdapter(make_settings())
+        outcome = asyncio.run(adapter.search([QUERY]))
+    assert outcome.status == "erro_subprocess"
+    assert outcome.listings == []
 
 
 def test_an_empty_query_list_returns_ok_without_a_subprocess_call():

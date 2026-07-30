@@ -168,16 +168,27 @@ class ClaudeCliAdapter:
             "--model", self._settings.model,
         ]
 
-        proc = subprocess.run(
-            cmd,
-            input=prompt,
-            env=child_env(),
-            capture_output=True,
-            text=True,
-            timeout=SUBPROCESS_TIMEOUT_S,
-        )
+        try:
+            proc = subprocess.run(
+                cmd,
+                input=prompt,
+                env=child_env(),
+                capture_output=True,
+                text=True,
+                timeout=SUBPROCESS_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired as exc:
+            payload: dict[str, Any] = {
+                "returncode": None,
+                "stdout_tail": (exc.stdout or "")[-2000:],
+                "stderr_tail": (exc.stderr or "")[-2000:],
+                "timeout": True,
+            }
+            return SearchOutcome(
+                listings=[], status=STATUS_SUBPROCESS_ERROR, payload=payload
+            )
 
-        payload: dict[str, Any] = {
+        payload = {
             "returncode": proc.returncode,
             "stdout_tail": proc.stdout[-2000:],
             "stderr_tail": proc.stderr[-2000:],
