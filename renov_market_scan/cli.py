@@ -65,10 +65,14 @@ def run(
     incluir_novos: bool = typer.Option(
         False, "--incluir-novos/--sem-novos", help="Inclui anuncios novos e lacrados na mediana."
     ),
-    concorrencia: int = typer.Option(4, "--concorrencia", help="Chamadas simultaneas a API."),
+    concorrencia: int = typer.Option(
+        4,
+        "--concorrencia",
+        help="Paralelismo do pipeline (a coleta via CLI e serializada).",
+    ),
     cache: Path = typer.Option(Path(".cache/scan.sqlite"), "--cache", help="Banco de cache."),
     retomar: bool = typer.Option(False, "--retomar", help="Pula o que ja esta no cache do dia."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="So mostra plano e custo."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="So mostra o plano, sem coletar."),
     reprocessar_filtro: bool = typer.Option(
         False, "--reprocessar-filtro", help="Regrava o relatorio do cache, sem rede."
     ),
@@ -102,11 +106,11 @@ def run(
     console.print(f"Pares (modelo x fonte): {len(plan) * len(sources)}")
 
     if dry_run:
-        console.print("\n[green]--dry-run: nada foi gasto.[/green]")
+        console.print("\n[green]--dry-run: plano exibido, nada foi coletado.[/green]")
         raise typer.Exit(code=0)
 
-    if not reprocessar_filtro and not typer.confirm("\nConfirma a execucao e o gasto estimado?"):
-        console.print("[yellow]Cancelado. Nada foi gasto.[/yellow]")
+    if not reprocessar_filtro and not typer.confirm("\nConfirma a execucao?"):
+        console.print("[yellow]Cancelado. Nada foi coletado.[/yellow]")
         raise typer.Exit(code=1)
 
     _configure_logging(output_dir)
@@ -161,6 +165,31 @@ def run(
         console.print(f"Buscas realizadas: {result.searches_performed}")
         console.print(f"Anuncios aceitos:  {len(result.sample_rows)}")
         console.print(f"Descartados:       {len(result.discarded_rows)}")
+        if result.search_status_counts:
+            status_line = ", ".join(
+                f"{status}: {count}"
+                for status, count in sorted(result.search_status_counts.items())
+            )
+            console.print(f"Status das buscas: {status_line}")
+        failed = sum(
+            count
+            for status, count in result.search_status_counts.items()
+            if status != "ok"
+        )
+        if failed and not result.sample_rows:
+            console.print(
+                "\n[yellow]Nenhum anuncio coletado — as buscas falharam ou devolveram vazio.[/yellow]"
+            )
+            if result.collection_error_hint:
+                console.print(f"[yellow]Motivo:[/yellow] {result.collection_error_hint}")
+            if any(
+                status == "limite_de_plano"
+                for status in result.search_status_counts
+            ):
+                console.print(
+                    "[yellow]Limite do plano/sessao do Claude Code. "
+                    "Aguarde o reset e rode com --retomar.[/yellow]"
+                )
         return result
 
     try:

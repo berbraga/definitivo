@@ -24,7 +24,12 @@ from renov_market_scan.collect.base import SearchOutcome
 from renov_market_scan.config import Settings
 from renov_market_scan.models import Condition, Listing, Query
 
-PLAN_LIMIT_PATTERNS: tuple[str, ...] = ("usage limit", "rate limit", "try again")
+PLAN_LIMIT_PATTERNS: tuple[str, ...] = (
+    "usage limit",
+    "rate limit",
+    "session limit",
+    "try again",
+)
 
 
 def child_env() -> dict[str, str]:
@@ -126,6 +131,23 @@ def _normalize_condition(value: str) -> Condition:
     if lowered in VALID_CONDITIONS:
         return lowered  # type: ignore[return-value]
     return "desconhecido"
+
+
+def collection_error_hint(payload: dict[str, Any]) -> str | None:
+    """Human-readable failure reason from a CLI subprocess payload, if any."""
+    stdout_tail = payload.get("stdout_tail")
+    if isinstance(stdout_tail, str) and stdout_tail.strip():
+        try:
+            envelope = json.loads(stdout_tail)
+            result = envelope.get("result")
+            if result:
+                return str(result)
+        except json.JSONDecodeError:
+            pass
+    stderr_tail = payload.get("stderr_tail")
+    if isinstance(stderr_tail, str) and stderr_tail.strip():
+        return stderr_tail.strip()[:300]
+    return None
 
 
 def _classify_failure(stdout: str, stderr: str) -> str:

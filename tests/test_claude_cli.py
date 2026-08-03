@@ -173,6 +173,27 @@ def test_a_recognized_plan_limit_message_is_classified_distinctly():
     assert outcome.status == "limite_de_plano"
 
 
+def test_session_limit_is_classified_as_plan_limit():
+    envelope = fake_envelope(
+        "You've hit your session limit · resets 6:50pm (America/Sao_Paulo)",
+        is_error=True,
+    )
+    fake_proc = MagicMock(returncode=1, stdout=envelope, stderr="")
+    with (
+        patch("shutil.which", return_value="/usr/local/bin/claude"),
+        patch(
+            "subprocess.run",
+            side_effect=[
+                MagicMock(returncode=0, stdout="Logged in", stderr=""),
+                fake_proc,
+            ],
+        ),
+    ):
+        adapter = ClaudeCliAdapter(make_settings())
+        outcome = asyncio.run(adapter.search([QUERY]))
+    assert outcome.status == "limite_de_plano"
+
+
 def test_a_timeout_is_a_subprocess_error():
     with (
         patch("shutil.which", return_value="/usr/local/bin/claude"),
@@ -188,6 +209,20 @@ def test_a_timeout_is_a_subprocess_error():
         outcome = asyncio.run(adapter.search([QUERY]))
     assert outcome.status == "erro_subprocess"
     assert outcome.listings == []
+
+
+def test_collection_error_hint_reads_the_cli_envelope_result():
+    from renov_market_scan.collect.claude_cli import collection_error_hint
+
+    payload = {
+        "stdout_tail": json.dumps(
+            {
+                "is_error": True,
+                "result": "You've hit your session limit · resets 6:50pm",
+            }
+        )
+    }
+    assert "session limit" in collection_error_hint(payload)
 
 
 def test_an_empty_query_list_returns_ok_without_a_subprocess_call():

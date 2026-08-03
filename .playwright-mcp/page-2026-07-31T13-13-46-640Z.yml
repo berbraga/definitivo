@@ -1,0 +1,22 @@
+- generic [ref=f6e3]:
+  - generic [ref=f6e4]:
+    - heading "Sorry, you have been blocked" [level=1] [ref=f6e5]
+    - heading "You are unable to access enjoei.com.br" [level=2] [ref=f6e6]
+  - generic [ref=f6e12]:
+    - generic [ref=f6e13]:
+      - heading "Why have I been blocked?" [level=2] [ref=f6e14]
+      - paragraph [ref=f6e15]: This website is using a security service to protect itself from online attacks. The action you just performed triggered the security solution. There are several actions that could trigger this block including submitting a certain word or phrase, a SQL command or malformed data.
+    - generic [ref=f6e16]:
+      - heading "What can I do to resolve this?" [level=2] [ref=f6e17]
+      - paragraph [ref=f6e18]: You can email the site owner to let them know you were blocked. Please include what you were doing when this page came up and the Cloudflare Ray ID found at the bottom of this page.
+  - paragraph [ref=f6e20]:
+    - generic [ref=f6e21]:
+      - text: "Cloudflare Ray ID:"
+      - strong [ref=f6e22]: a23cdcb97840d10c
+    - generic [ref=f6e23]:
+      - text: "Your IP:"
+      - button "Click to reveal" [ref=f6e24] [cursor=pointer]
+    - generic [ref=f6e25]:
+      - text: Performance & security by
+      - link "Cloudflare" [ref=f6e26] [cursor=pointer]:
+        - /url: https://www.cloudflare.com/5xx-error-landing

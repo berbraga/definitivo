@@ -1,0 +1,12 @@
+- generic [ref=e2]:
+  - heading "Acesso bloqueado" [level=1] [ref=e3]
+  - heading "Não foi possível acessar trocafy.com.br" [level=2] [ref=e4]
+  - generic [ref=e5]:
+    - heading "Por que fui bloqueado?" [level=4] [ref=e6]
+    - paragraph [ref=e7]: O site é protegido por um serviço de segurança online que o protege contra ataques. Este acesso foi filtrado e classificado como indevido.
+  - generic [ref=e8]:
+    - heading "O que eu devo fazer?" [level=4] [ref=e9]
+    - paragraph [ref=e10]: Entre em contato por email com o dono do site, informando sobre o bloqueio. Envie o ID da requisição exibido abaixo para facilitar a investigação.
+  - separator [ref=e11]
+  - paragraph [ref=e12]: "ID da requisição: c2d5ab49990c70aa5ff0f91a42a4125e - Seu endereço IP: 161.97.119.153"
+  - paragraph [ref=e13]: "Horário: 2026-07-31 09:37:54 - Local: 1s3"

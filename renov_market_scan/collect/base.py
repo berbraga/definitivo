@@ -17,13 +17,13 @@ class SearchOutcome:
 
 class SearchAdapter(Protocol):
     """Any source of listings. One call per (model, source) pair, carrying
-    every phrase. AnthropicSearchAdapter is the only networked implementation;
+    every phrase. ClaudeCliAdapter is the only networked implementation;
     tests collect through FixtureAdapter."""
 
     async def search(self, queries: list[Query]) -> SearchOutcome:
         """Run one call covering every phrase for a (model, source) pair.
 
-        Both phrases travel in a single call so that max_uses caps the whole
-        pair, which is what the cost estimate assumes.
+        Both phrases travel in a single call, so one call covers the whole
+        pair.
         """
         ...

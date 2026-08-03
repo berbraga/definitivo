@@ -1,0 +1,9 @@
+- generic [active] [ref=f1e1]:
+  - banner [ref=f1e2]:
+    - link "Mercado Libre - Donde comprar y vender de todo" [ref=f1e4] [cursor=pointer]:
+      - /url: https://www.mercadolibre.com/
+  - main [ref=f1e5]:
+    - generic [ref=f1e8]:
+      - heading "Hubo un error accediendo a esta pagina..." [level=4] [ref=f1e9]
+      - link "Ir a la página principal" [ref=f1e11] [cursor=pointer]:
+        - /url: https://mercadolibre.com/

@@ -3,7 +3,7 @@
 import asyncio
 import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from renov_market_scan.cache.store import (
@@ -14,6 +14,7 @@ from renov_market_scan.cache.store import (
     save_raw,
 )
 from renov_market_scan.collect.base import SearchAdapter
+from renov_market_scan.collect.claude_cli import collection_error_hint
 from renov_market_scan.config import Settings
 from renov_market_scan.filtering.matcher import load_brand_aliases
 from renov_market_scan.filtering.pipeline import FilterContext, run_pipeline
@@ -81,6 +82,8 @@ class RunResult:
     searches_performed: int
     report_path: Path
     template_copy_path: Path
+    search_status_counts: dict[str, int] = field(default_factory=dict)
+    collection_error_hint: str | None = None
 
 
 async def execute(
@@ -102,10 +105,12 @@ async def execute(
     brand_aliases = load_brand_aliases(BRANDS_FILE)
     connection = open_store(options.cache_path)
     searches_performed = 0
+    search_status_counts: dict[str, int] = {}
+    collection_error_hint_text: str | None = None
 
     try:
         if not options.reprocess_only:
-            searches_performed = await _collect(
+            searches_performed, search_status_counts, collection_error_hint_text = await _collect(
                 plan, sources, brand_aliases, options, adapter, connection, progress
             )
 
@@ -119,6 +124,8 @@ async def execute(
             rejected_by_key,
             options,
             searches_performed,
+            search_status_counts,
+            collection_error_hint_text,
         )
     finally:
         connection.commit()
@@ -133,7 +140,7 @@ async def _collect(
     adapter: SearchAdapter,
     connection: sqlite3.Connection,
     progress: Callable[[int, int], None] | None,
-) -> int:
+) -> tuple[int, dict[str, int], str | None]:
     """One adapter call per (item, source), carrying every phrase.
 
     Fires every pair concurrently via asyncio.gather. Whether calls actually
@@ -165,6 +172,8 @@ async def _collect(
 
     done = 0
     performed = 0
+    status_counts: dict[str, int] = {}
+    error_hint: str | None = None
     write_lock = asyncio.Lock()
 
     def advance() -> None:
@@ -177,10 +186,15 @@ async def _collect(
         advance()
 
     async def collect_one(item: SearchPlanItem, source: Source) -> None:
-        nonlocal performed
+        nonlocal performed, error_hint
         queries = build_queries(item, [source], brand_aliases)
         outcome = await adapter.search(queries)
         async with write_lock:
+            status_counts[outcome.status] = status_counts.get(outcome.status, 0) + 1
+            if outcome.status != "ok" and error_hint is None:
+                hint = collection_error_hint(outcome.payload)
+                if hint:
+                    error_hint = hint
             performed += 1
             save_raw(
                 connection,
@@ -199,7 +213,7 @@ async def _collect(
             advance()
 
     await asyncio.gather(*(collect_one(item, source) for item, source in outstanding))
-    return performed
+    return performed, status_counts, error_hint
 
 
 def _analyze(
@@ -238,6 +252,8 @@ def _emit(
     rejected_by_key: dict[str, list[RejectedListing]],
     options: RunOptions,
     searches_performed: int,
+    search_status_counts: dict[str, int],
+    collection_error_hint_text: str | None,
 ) -> RunResult:
     """Write every output artifact."""
     summary_rows = build_summary_rows(plan, stats_by_key, options.collected_on)
@@ -279,4 +295,6 @@ def _emit(
         searches_performed=searches_performed,
         report_path=report_path,
         template_copy_path=template_copy_path,
+        search_status_counts=search_status_counts,
+        collection_error_hint=collection_error_hint_text,
     )

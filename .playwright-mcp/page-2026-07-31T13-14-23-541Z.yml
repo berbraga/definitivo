@@ -1,0 +1,22 @@
+- generic [ref=f8e3]:
+  - generic [ref=f8e4]:
+    - heading "Sorry, you have been blocked" [level=1] [ref=f8e5]
+    - heading "You are unable to access olx.com.br" [level=2] [ref=f8e6]
+  - generic [ref=f8e12]:
+    - generic [ref=f8e13]:
+      - heading "Why have I been blocked?" [level=2] [ref=f8e14]
+      - paragraph [ref=f8e15]: This website is using a security service to protect itself from online attacks. The action you just performed triggered the security solution. There are several actions that could trigger this block including submitting a certain word or phrase, a SQL command or malformed data.
+    - generic [ref=f8e16]:
+      - heading "What can I do to resolve this?" [level=2] [ref=f8e17]
+      - paragraph [ref=f8e18]: You can email the site owner to let them know you were blocked. Please include what you were doing when this page came up and the Cloudflare Ray ID found at the bottom of this page.
+  - paragraph [ref=f8e20]:
+    - generic [ref=f8e21]:
+      - text: "Cloudflare Ray ID:"
+      - strong [ref=f8e22]: a23cdda50c183734
+    - generic [ref=f8e23]:
+      - text: "Your IP:"
+      - button "Click to reveal" [ref=f8e24] [cursor=pointer]
+    - generic [ref=f8e25]:
+      - text: Performance & security by
+      - link "Cloudflare" [ref=f8e26] [cursor=pointer]:
+        - /url: https://www.cloudflare.com/5xx-error-landing

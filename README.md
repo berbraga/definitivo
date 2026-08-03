@@ -51,14 +51,13 @@ variavel, a notificacao e apenas pulada com um aviso no log.
 
 ## Uso
 
-Sempre comece com `--dry-run`, que mostra o plano e o custo estimado sem gastar
-nada:
+Sempre comece com `--dry-run`, que mostra o plano sem coletar nada:
 
 ```bash
 uv run renov-market-scan run --input Template-iPhone.xlsx --limite 10 --dry-run
 ```
 
-Execução real (pede confirmação antes de gastar):
+Execução real (pede confirmação antes de coletar):
 
 ```bash
 uv run renov-market-scan run \
@@ -67,7 +66,7 @@ uv run renov-market-scan run \
   --limite 10 --concorrencia 4
 ```
 
-Reexecutar aproveitando o cache do dia, sem custo:
+Reexecutar aproveitando o cache do dia, sem coletar de novo:
 
 ```bash
 uv run renov-market-scan run --input Template-iPhone.xlsx --retomar
@@ -90,10 +89,10 @@ uv run renov-market-scan run --input Template-iPhone.xlsx --reprocessar-filtro
 | `--marca` | todas | Filtra por fabricante. |
 | `--limite` | sem limite | Primeiros N modelos, na ordem da planilha. |
 | `--incluir-novos` / `--sem-novos` | `--sem-novos` | Inclui anúncios novos e lacrados na mediana. |
-| `--concorrencia` | 4 | Chamadas simultâneas à API. |
+| `--concorrencia` | 4 | Paralelismo do pipeline (a coleta via CLI é serializada). |
 | `--cache` | `.cache/scan.sqlite` | Banco de cache. |
 | `--retomar` | desligado | Pula o que já está no cache do dia. |
-| `--dry-run` | desligado | Só mostra plano e custo. |
+| `--dry-run` | desligado | Só mostra o plano, sem coletar. |
 | `--reprocessar-filtro` | desligado | Regrava o relatório do cache, sem rede. |
 
 ## Saídas
@@ -164,7 +163,7 @@ Ordem do filtro. A primeira regra que rejeita é a registrada:
 4. Blacklist contextual: `bateria`, `tela`, `display` sem marcador de isenção.
 5. Condição: `seminovo` e `usado` por padrão.
 6. Preço: parser BRL, rejeitando qualquer valor precedido por `Nx`.
-7. Evidência: os dígitos do preço têm que aparecer no `cited_text` da API.
+7. Evidência: os dígitos do preço têm que aparecer no `cited_text` relatado pelo modelo.
 8. Faixa de sanidade: piso R$ 80, teto R$ 15.000.
 9. Deduplicação por URL canônica e por `(título, preço)`.
 
