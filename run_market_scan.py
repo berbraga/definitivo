@@ -66,7 +66,9 @@ de aparelhos USADOS/SEMINOVOS. Extraia o preço só do snippet da busca — não
 abra páginas; sem preço claro no snippet, descarte o anúncio.
 
 No máximo 1 busca por dispositivo/fonte. Não repita busca sem resultado útil;
-com anúncios suficientes para um dispositivo, siga para o próximo.
+com anúncios suficientes para um dispositivo, siga para o próximo. Se uma
+fonte já rendeu anúncios válidos suficientes (5+) pra esse dispositivo, não
+precisa consultar as outras fontes dele.
 
 REGRAS DE ACEITE:
 1. Qualificador do título (pro/max/plus/mini/ultra/neo/fusion/lite/fe/se/
@@ -81,7 +83,7 @@ REGRAS DE ACEITE:
 6. Máximo 6 anúncios por dispositivo, fontes variadas.
 
 JSON puro, sem markdown:
-{{"resultados":[{{"erp_code":"...","anuncios":[{{"fonte":"...","titulo":"...","preco_brl":0.0,"condicao":"usado","url":"..."}}],"observacao":""}}]}}
+{{"resultados":[{{"erp_code":"...","anuncios":[{{"fonte":"...","titulo":"...","preco_brl":0.0,"condicao":"usado","url":"..."}}],"fontes_consultadas":["..."],"observacao":""}}]}}
 
 Sem dado válido: "anuncios":[] + "observacao". Não calcule mediana/min/max.
 Não edite arquivos. Não faça perguntas.
@@ -131,6 +133,7 @@ class Stats:
     sources: str = ""
     status: str = "sem_dados"
     listings: list[dict] = field(default_factory=list)
+    sources_queried: list[str] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------
@@ -329,7 +332,9 @@ def summarize_costs(metric_rows: list[dict]) -> dict:
 # Estatística (Python, nunca o modelo)
 # --------------------------------------------------------------------------
 
-def compute_stats(listings: list[dict]) -> Stats:
+def compute_stats(entry: dict) -> Stats:
+    listings = entry.get("anuncios", [])
+    sources_queried = entry.get("fontes_consultadas", [])
     valid = []
     for item in listings:
         try:
@@ -341,7 +346,7 @@ def compute_stats(listings: list[dict]) -> Stats:
         valid.append({**item, "preco_brl": price})
 
     if not valid:
-        return Stats(status="sem_dados")
+        return Stats(status="sem_dados", sources_queried=sources_queried)
 
     prices = sorted(v["preco_brl"] for v in valid)
     if len(prices) >= 4:
@@ -365,6 +370,7 @@ def compute_stats(listings: list[dict]) -> Stats:
         sources=", ".join(sorted({str(v.get("fonte", "?")) for v in valid})),
         status=status,
         listings=valid,
+        sources_queried=sources_queried,
     )
 
 
@@ -520,9 +526,7 @@ def main() -> int:
             for device in cached_devices:
                 cache_path = device_cache_path(cache_dir, device.erp, current_week)
                 entry = json.loads(cache_path.read_text(encoding="utf-8"))
-                results[device.erp] = compute_stats(entry.get("anuncios", []))
-                # Nota (revisada na Task 10): compute_stats ainda recebe a lista de
-                # anúncios aqui, não o `entry` inteiro — a assinatura só muda na Task 10.
+                results[device.erp] = compute_stats(entry)
 
             if not pending:
                 print(f"[{i}/{len(batches)}] cache (todos os {len(batch)} dispositivos)")
@@ -546,7 +550,7 @@ def main() -> int:
 
             for entry in payload.get("resultados", []):
                 erp = str(entry.get("erp_code"))
-                st = compute_stats(entry.get("anuncios", []))  # Task 10 troca para compute_stats(entry)
+                st = compute_stats(entry)
                 results[erp] = st
                 device_cache_path(cache_dir, erp, current_week).write_text(
                     json.dumps(entry, ensure_ascii=False, indent=2), encoding="utf-8"

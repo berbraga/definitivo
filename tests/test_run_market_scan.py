@@ -143,3 +143,22 @@ def test_slugify_erp_keeps_alphanumeric_only():
     from run_market_scan import slugify_erp
     assert slugify_erp("20023A0") == "20023A0"
     assert slugify_erp("AB/CD 12") == "AB-CD-12"
+
+
+def test_compute_stats_captures_sources_queried_from_model_self_report():
+    from run_market_scan import compute_stats
+
+    entry = {
+        "anuncios": [
+            {"preco_brl": 900.0, "url": "https://x", "fonte": "mercadolivre"},
+        ],
+        "fontes_consultadas": ["mercadolivre"],
+    }
+    stats = compute_stats(entry)
+    assert stats.sources_queried == ["mercadolivre"]
+
+
+def test_compute_stats_defaults_sources_queried_to_empty_list_when_absent():
+    from run_market_scan import compute_stats
+    stats = compute_stats({"anuncios": []})
+    assert stats.sources_queried == []
