@@ -647,9 +647,10 @@ REGRAS DE ACEITE:
 1. Qualificador do título (pro/max/plus/mini/ultra/neo/fusion/lite/fe/se/
    power/play/air) IGUAL ao alvo. "13" não aceita "13 Pro Max". "5g" opcional.
 2. Capacidade explícita (título ou URL) igual ao alvo (1024=1TB); sem isso, descarte.
-3. Descarte acessório/peça (capa/case/película/vidro/tela/bateria/placa/flex/
-   carcaça/câmera/botão/"não liga"/réplica/clone/carregador/fone/cabo/chip) e
-   "para retirada".
+3. Descarte acessórios e peças: capa, capinha, case, película, vidro, tela,
+   display, touch, bateria, placa, flex, conector, carcaça, aro, tampa,
+   câmera, alto-falante, botão, "para retirada", "não liga", réplica, clone,
+   similar, carregador, fone, cabo, chip, suporte.
 4. Preço à vista — rejeite "12x"/"sem juros". "R$ 1.234,56" → 1234.56 (float).
 5. Descarte "novo"/"lacrado"; aceite seminovo/usado/vitrine/recondicionado.
 6. Máximo 6 anúncios por dispositivo, fontes variadas.
