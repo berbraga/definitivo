@@ -183,3 +183,91 @@ def test_median_divergence_pct_skips_devices_missing_in_either_side():
     from run_market_scan import median_divergence_pct
     diffs = median_divergence_pct({"A": 100.0}, {"B": 100.0})
     assert diffs == {}
+
+
+def test_process_batch_cached_pending_split(tmp_path):
+    """Cobre o núcleo do loop de lotes do main(): split cache/pendente,
+    chave de cache correta mesmo com erp_code mal formatado pelo modelo
+    (Finding 1), resultado vazio não é cacheado (Finding 2), e erp_code
+    sem correspondência não quebra nem cacheia sob chave errada (Finding 1).
+    """
+    from datetime import date
+    from run_market_scan import Stats, compute_stats, device_cache_path, process_batch
+
+    current_week = date(2026, 8, 1)
+
+    device_cached = make_device(erp="20023A0", row=3, name="CACHED DEVICE")
+    device_fresh_empty = make_device(erp="30099B1", row=4, name="FRESH EMPTY")
+    device_fresh_ok = make_device(erp="ab/cd 12", row=5, name="FRESH OK")
+    device_unmatched_target = make_device(erp="99999Z9", row=6, name="UNMATCHED TARGET")
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+
+    # device_cached já tem cache desta semana -> não deve disparar claude -p pra ele.
+    cached_entry = {
+        "anuncios": [{"preco_brl": 900.0, "url": "https://x", "fonte": "trocafy"}],
+        "fontes_consultadas": ["trocafy"],
+    }
+    device_cache_path(cache_dir, device_cached.erp, current_week).write_text(
+        json.dumps(cached_entry), encoding="utf-8"
+    )
+
+    batch = [device_cached, device_fresh_empty, device_fresh_ok, device_unmatched_target]
+
+    fake_payload = {
+        "resultados": [
+            # erp_code com casing/formatação diferente da planilha (Finding 1):
+            # deve casar com device_fresh_ok via forma normalizada e usar
+            # device_fresh_ok.erp como chave, não a string devolvida.
+            {"erp_code": "AB-CD-12", "anuncios": [
+                {"preco_brl": 500.0, "url": "https://y", "fonte": "trocafy"}
+            ], "fontes_consultadas": ["trocafy"]},
+            # resultado vazio -> não deve ser cacheado (Finding 2).
+            {"erp_code": device_fresh_empty.erp, "anuncios": [], "fontes_consultadas": ["trocafy"]},
+            # erp_code que não corresponde a nenhum device pendente -> descartado,
+            # sem crash, sem cache sob chave errada (Finding 1).
+            {"erp_code": "NAO-EXISTE-NO-LOTE", "anuncios": [
+                {"preco_brl": 999.0, "url": "https://z", "fonte": "trocafy"}
+            ], "fontes_consultadas": ["trocafy"]},
+        ],
+        "_meta": {"session_id": "s1", "input_tokens": 1, "output_tokens": 1},
+    }
+
+    with patch("run_market_scan.run_claude_batch", return_value=fake_payload) as mocked:
+        results, meta, called_claude = process_batch(
+            batch, cache_dir, current_week, model="claude-sonnet-5", timeout=900,
+        )
+        # (a) device já cacheado não deve ir para a chamada do claude -p.
+        called_devices = mocked.call_args[0][0]
+        assert device_cached not in called_devices
+        assert {d.erp for d in called_devices} == {
+            device_fresh_empty.erp, device_fresh_ok.erp, device_unmatched_target.erp,
+        }
+
+    assert called_claude is True
+    assert meta == fake_payload["_meta"]
+
+    # device_cached: veio do cache, presente nos resultados.
+    assert results[device_cached.erp].n == 1
+
+    # device_fresh_ok: chave correta é a do Device (planilha), não "AB-CD-12".
+    assert device_fresh_ok.erp in results
+    assert results[device_fresh_ok.erp].n == 1
+    assert "AB-CD-12" not in results
+
+    # (b) device_fresh_empty: resultado vazio processado, mas SEM cache escrito.
+    assert results[device_fresh_empty.erp].status == "sem_dados"
+    assert not device_cache_path(cache_dir, device_fresh_empty.erp, current_week).exists()
+
+    # (c) device_unmatched_target: nunca recebeu resposta -> não está em results
+    # nem tem arquivo de cache (nem sob a chave certa, nem sob "NAO-EXISTE-NO-LOTE").
+    assert device_unmatched_target.erp not in results
+    assert not device_cache_path(cache_dir, device_unmatched_target.erp, current_week).exists()
+    assert not device_cache_path(cache_dir, "NAO-EXISTE-NO-LOTE", current_week).exists()
+
+    # Cache foi de fato gravado em disco para device_fresh_ok, sob a chave certa.
+    written = device_cache_path(cache_dir, device_fresh_ok.erp, current_week)
+    assert written.exists()
+    written_entry = json.loads(written.read_text(encoding="utf-8"))
+    assert written_entry["erp_code"] == "AB-CD-12"  # conteúdo é o que o modelo mandou

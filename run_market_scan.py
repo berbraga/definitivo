@@ -65,10 +65,11 @@ Para CADA dispositivo, use WebSearch (fontes: {sources}) para achar anúncios
 de aparelhos USADOS/SEMINOVOS. Extraia o preço só do snippet da busca — não
 abra páginas; sem preço claro no snippet, descarte o anúncio.
 
-No máximo 1 busca por dispositivo/fonte. Não repita busca sem resultado útil;
-com anúncios suficientes para um dispositivo, siga para o próximo. Se uma
-fonte já rendeu anúncios válidos suficientes (5+) pra esse dispositivo, não
-precisa consultar as outras fontes dele.
+No máximo 1 busca por dispositivo/fonte. Não repita busca sem resultado útil.
+Não pare de buscar um dispositivo até ter pelo menos 5 anúncios válidos no
+total (somando as fontes) ou ter esgotado todas as fontes listadas para ele.
+Só pule uma fonte específica (não o dispositivo inteiro) se ela já sozinha
+rendeu 5+ anúncios válidos para aquele dispositivo.
 
 REGRAS DE ACEITE:
 1. Qualificador do título (pro/max/plus/mini/ultra/neo/fusion/lite/fe/se/
@@ -482,6 +483,72 @@ def prune_stale_weeks(cache_dir: Path, current_week: date) -> int:
     return removed
 
 
+def match_pending_device(erp_code: str, pending: list[Device]) -> Device | None:
+    """Casa o erp_code devolvido pelo modelo com o Device pendente correto.
+
+    O modelo às vezes ecoa o erp_code com capitalização/formatação diferente
+    da planilha. Comparamos formas normalizadas (slugify_erp, case-insensitive)
+    para achar o Device original — cuja .erp (fonte confiável) deve ser usado
+    como chave, nunca a string devolvida pelo modelo.
+    """
+    target = slugify_erp(str(erp_code)).lower()
+    for device in pending:
+        if slugify_erp(device.erp).lower() == target:
+            return device
+    return None
+
+
+def process_batch(
+    batch: list[Device],
+    cache_dir: Path,
+    current_week: date,
+    model: str,
+    timeout: int,
+) -> tuple[dict[str, Stats], dict | None, bool]:
+    """Processa um lote: separa cache/pendentes, roda os pendentes, funde
+    resultados e grava cache (pulando resultados vazios — Finding 2).
+
+    Retorna (results_deste_lote, meta_da_chamada_ou_None, houve_chamada_claude).
+    Não grava métricas nem lança em caso de falha do claude — quem chama trata.
+    """
+    results: dict[str, Stats] = {}
+
+    pending = [d for d in batch
+               if not device_cache_path(cache_dir, d.erp, current_week).exists()]
+    cached_devices = [d for d in batch if d not in pending]
+
+    for device in cached_devices:
+        cache_path = device_cache_path(cache_dir, device.erp, current_week)
+        entry = json.loads(cache_path.read_text(encoding="utf-8"))
+        results[device.erp] = compute_stats(entry)
+
+    if not pending:
+        return results, None, False
+
+    payload = run_claude_batch(pending, model, timeout)
+
+    for entry in payload.get("resultados", []):
+        returned_erp = entry.get("erp_code")
+        device = match_pending_device(returned_erp, pending)
+        if device is None:
+            print(
+                f"    AVISO: erp_code '{returned_erp}' devolvido pelo modelo não "
+                f"corresponde a nenhum dispositivo pendente deste lote — descartado.",
+                file=sys.stderr,
+            )
+            continue
+
+        erp = device.erp
+        results[erp] = compute_stats(entry)
+
+        if entry.get("anuncios"):
+            device_cache_path(cache_dir, erp, current_week).write_text(
+                json.dumps(entry, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+
+    return results, payload["_meta"], True
+
+
 # --------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------
@@ -528,27 +595,18 @@ def main() -> int:
 
     try:
         for i, batch in enumerate(batches, start=1):
-            pending = [d for d in batch
-                       if not device_cache_path(cache_dir, d.erp, current_week).exists()]
-            cached_devices = [d for d in batch if d not in pending]
-
-            for device in cached_devices:
-                cache_path = device_cache_path(cache_dir, device.erp, current_week)
-                entry = json.loads(cache_path.read_text(encoding="utf-8"))
-                results[device.erp] = compute_stats(entry)
-
-            if not pending:
+            pending_names = [
+                d.name for d in batch
+                if not device_cache_path(cache_dir, d.erp, current_week).exists()
+            ]
+            if not pending_names:
                 print(f"[{i}/{len(batches)}] cache (todos os {len(batch)} dispositivos)")
-                continue
+            else:
+                print(f"[{i}/{len(batches)}] {', '.join(pending_names)}")
 
-            print(f"[{i}/{len(batches)}] {', '.join(d.name for d in pending)}")
             try:
-                payload = run_claude_batch(pending, args.model, args.timeout)
-                row = {"lote_idx": i, "n_dispositivos": len(pending), **payload["_meta"]}
-                metric_rows.append(row)
-                write_lote_metrics(
-                    args.output_dir / "metrics" / f"rodada_{collected_at}.csv",
-                    lote_idx=i, n_dispositivos=len(pending), meta=payload["_meta"],
+                batch_results, meta, called_claude = process_batch(
+                    batch, cache_dir, current_week, args.model, args.timeout,
                 )
             except Exception as exc:  # noqa: BLE001 — um lote ruim não derruba a rodada
                 msg = f"lote {i}: {exc}"
@@ -557,15 +615,17 @@ def main() -> int:
                 time.sleep(args.pausa * 4)
                 continue
 
-            for entry in payload.get("resultados", []):
-                erp = str(entry.get("erp_code"))
-                st = compute_stats(entry)
-                results[erp] = st
-                device_cache_path(cache_dir, erp, current_week).write_text(
-                    json.dumps(entry, ensure_ascii=False, indent=2), encoding="utf-8"
-                )
+            results.update(batch_results)
 
-            time.sleep(args.pausa)
+            if called_claude:
+                n_pending = len(pending_names)
+                row = {"lote_idx": i, "n_dispositivos": n_pending, **meta}
+                metric_rows.append(row)
+                write_lote_metrics(
+                    args.output_dir / "metrics" / f"rodada_{collected_at}.csv",
+                    lote_idx=i, n_dispositivos=n_pending, meta=meta,
+                )
+                time.sleep(args.pausa)
 
         out_xlsx = args.output_dir / f"referencia-mercado_{collected_at}.xlsx"
         write_report(args.input, out_xlsx, devices, results, collected_at)
