@@ -68,10 +68,9 @@ Extraia o preço APENAS do snippet/resumo retornado pela busca. Não abra
 páginas. Se o snippet não mostrar preço claro, descarte o anúncio.
 
 Faça NO MÁXIMO 1 busca (WebSearch) por dispositivo em cada uma das fontes
-listadas — no máximo {max_buscas_por_lote} chamadas de WebSearch no total
-para este lote inteiro. Não repita uma busca que já não trouxe resultado
-útil. Assim que tiver anúncios suficientes para um dispositivo, pare de
-buscar por ele e siga para o próximo.
+listadas. Não repita uma busca que já não trouxe resultado útil. Assim que
+tiver anúncios suficientes para um dispositivo, pare de buscar por ele e
+siga para o próximo.
 
 REGRAS DE ACEITE DE ANÚNCIO (aplicar antes de incluir):
 1. Modelo exato. O conjunto de qualificadores do título (pro, max, plus, mini,
@@ -98,6 +97,7 @@ em "observacao". NÃO calcule mediana, mínimo ou máximo. NÃO edite arquivos.
 NÃO faça perguntas — não há ninguém para responder.
 
 DISPOSITIVOS:
+(máximo {max_buscas_por_lote} chamadas de WebSearch no total para este lote)
 {devices}
 """
 
@@ -227,6 +227,16 @@ def read_devices(path: Path, somente_ativos: bool, limite: int | None) -> list[D
 # Execução do Claude CLI
 # --------------------------------------------------------------------------
 
+def build_prompt(devices: list[Device]) -> str:
+    return PROMPT_TEMPLATE.format(
+        sources=", ".join(SOURCES),
+        max_por_dispositivo=6,
+        max_buscas_por_lote=len(devices) * len(SOURCES),
+        devices=json.dumps([d.as_query_dict() for d in devices],
+                           ensure_ascii=False, indent=2),
+    )
+
+
 def run_claude_batch(devices: list[Device], model: str, timeout: int) -> dict:
     """Uma invocação headless do CLI para um lote. Prompt vai por stdin.
 
@@ -234,13 +244,7 @@ def run_claude_batch(devices: list[Device], model: str, timeout: int) -> dict:
     flag (confirmado em `claude --help`) — passá-la é ignorado em silêncio.
     O limite de buscas por lote é imposto por instrução no próprio prompt.
     """
-    prompt = PROMPT_TEMPLATE.format(
-        sources=", ".join(SOURCES),
-        max_por_dispositivo=6,
-        max_buscas_por_lote=len(devices) * len(SOURCES),
-        devices=json.dumps([d.as_query_dict() for d in devices],
-                           ensure_ascii=False, indent=2),
-    )
+    prompt = build_prompt(devices)
 
     cmd = [
         "claude", "-p",

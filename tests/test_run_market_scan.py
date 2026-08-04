@@ -99,3 +99,19 @@ def test_summarize_costs_handles_empty_list():
     summary = summarize_costs([])
     assert summary["total_cost_usd"] == 0
     assert summary["cache_read_ratio"] == 0.0
+
+
+def test_build_prompt_stable_prefix_is_identical_regardless_of_batch_size():
+    from run_market_scan import build_prompt
+
+    devices_8 = [make_device(erp=f"E{i}", row=i) for i in range(8)]
+    devices_7 = [make_device(erp=f"E{i}", row=i) for i in range(7)]
+
+    prompt_8 = build_prompt(devices_8)
+    prompt_7 = build_prompt(devices_7)
+
+    marker = "DISPOSITIVOS:"
+    prefix_8 = prompt_8[: prompt_8.index(marker)]
+    prefix_7 = prompt_7[: prompt_7.index(marker)]
+
+    assert prefix_8 == prefix_7
