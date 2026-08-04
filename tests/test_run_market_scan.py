@@ -73,3 +73,29 @@ def test_write_lote_metrics_creates_header_once_and_appends(tmp_path):
     assert rows[0]["total_cost_usd"] == "0.0239836"
     assert rows[1]["lote_idx"] == "2"
     assert rows[1]["num_turns"] == "26"
+
+
+def test_summarize_costs_aggregates_and_computes_ratio():
+    from run_market_scan import summarize_costs
+
+    rows = [
+        {"total_cost_usd": 0.02, "input_tokens": 10, "output_tokens": 190,
+         "cache_creation_input_tokens": 10000, "cache_read_input_tokens": 20000},
+        {"total_cost_usd": 0.05, "input_tokens": 20, "output_tokens": 210,
+         "cache_creation_input_tokens": 0, "cache_read_input_tokens": 800000},
+    ]
+    summary = summarize_costs(rows)
+
+    assert summary["total_cost_usd"] == 0.07
+    assert summary["total_input"] == 30
+    assert summary["total_output"] == 400
+    assert summary["total_cache_creation"] == 10000
+    assert summary["total_cache_read"] == 820000
+    assert summary["cache_read_ratio"] == 820000 / 430
+
+
+def test_summarize_costs_handles_empty_list():
+    from run_market_scan import summarize_costs
+    summary = summarize_costs([])
+    assert summary["total_cost_usd"] == 0
+    assert summary["cache_read_ratio"] == 0.0

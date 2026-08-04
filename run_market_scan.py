@@ -314,6 +314,25 @@ def write_lote_metrics(csv_path: Path, lote_idx: int, n_dispositivos: int, meta:
         writer.writerow(row)
 
 
+def summarize_costs(metric_rows: list[dict]) -> dict:
+    """Agrega as linhas de metrics/rodada_*.csv (ou os _meta em memória)
+    de uma rodada inteira num resumo único."""
+    total_input = sum(r.get("input_tokens") or 0 for r in metric_rows)
+    total_output = sum(r.get("output_tokens") or 0 for r in metric_rows)
+    total_cache_creation = sum(r.get("cache_creation_input_tokens") or 0 for r in metric_rows)
+    total_cache_read = sum(r.get("cache_read_input_tokens") or 0 for r in metric_rows)
+    total_cost = sum(r.get("total_cost_usd") or 0 for r in metric_rows)
+    denom = total_input + total_output
+    return {
+        "total_cost_usd": round(total_cost, 4),
+        "total_input": total_input,
+        "total_output": total_output,
+        "total_cache_creation": total_cache_creation,
+        "total_cache_read": total_cache_read,
+        "cache_read_ratio": (total_cache_read / denom) if denom else 0.0,
+    }
+
+
 # --------------------------------------------------------------------------
 # Estatística (Python, nunca o modelo)
 # --------------------------------------------------------------------------
@@ -500,6 +519,7 @@ def main() -> int:
     collected_at = started.strftime("%Y-%m-%d")
     results: dict[str, Stats] = {}
     failures: list[str] = []
+    metric_rows: list[dict] = []
 
     try:
         for i, batch in enumerate(batches, start=1):
@@ -514,6 +534,8 @@ def main() -> int:
                     payload = run_claude_batch(batch, args.model, args.timeout)
                     partial.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
                                        encoding="utf-8")
+                    row = {"lote_idx": i, "n_dispositivos": len(batch), **payload["_meta"]}
+                    metric_rows.append(row)
                     write_lote_metrics(
                         args.output_dir / "metrics" / f"rodada_{collected_at}.csv",
                         lote_idx=i, n_dispositivos=len(batch), meta=payload["_meta"],
@@ -546,6 +568,16 @@ def main() -> int:
             f"_Valores de anúncio (preço pedido), não de transação._"
         )
         print(summary)
+        cost = summarize_costs(metric_rows)
+        n_devices_for_cost = len(devices) or 1
+        print(
+            f"[custo] total US$ {cost['total_cost_usd']:.4f} · "
+            f"US$ {cost['total_cost_usd'] / n_devices_for_cost:.4f}/dispositivo · "
+            f"input {cost['total_input']} · output {cost['total_output']} · "
+            f"cache_creation {cost['total_cache_creation']} · "
+            f"cache_read {cost['total_cache_read']} · "
+            f"razao cache_read/(input+output) {cost['cache_read_ratio']:.1f}"
+        )
         notify_slack(summary)
         return 1 if failures else 0
 
