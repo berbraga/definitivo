@@ -267,10 +267,16 @@ def run_claude_batch(devices: list[Device], model: str, timeout: int) -> dict:
         raise RuntimeError(f"claude reportou erro: {str(envelope)[:500]}")
 
     payload = extract_json(envelope.get("result", ""))
+    usage = envelope.get("usage") or {}
     payload["_meta"] = {
         "session_id": envelope.get("session_id"),
         "duracao_s": round(elapsed, 1),
         "num_turns": envelope.get("num_turns"),
+        "total_cost_usd": envelope.get("total_cost_usd"),
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
+        "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
     }
     return payload
 
