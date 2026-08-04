@@ -436,11 +436,8 @@ def notify_slack(text: str) -> None:
 
 
 # --------------------------------------------------------------------------
-# Cache semanal (renova todo sábado)
+# Cache por dispositivo + semana (renova todo sábado)
 # --------------------------------------------------------------------------
-
-CACHE_WEEK_MARKER = ".cache_week"
-
 
 def _last_saturday(today: date) -> date:
     """Sábado da semana corrente (hoje, se hoje já for sábado)."""
@@ -448,28 +445,26 @@ def _last_saturday(today: date) -> date:
     return today - timedelta(days=days_since_saturday)
 
 
-def reset_cache_if_new_week(partials_dir: Path) -> None:
-    """Limpa os lotes em cache (partials/lote_*.json) uma vez por semana,
-    na virada de sábado — assim o scraper não fica reaproveitando preço
-    de mercado de semanas atrás indefinidamente."""
-    marker_path = partials_dir / CACHE_WEEK_MARKER
-    current_week = _last_saturday(datetime.now(timezone.utc).date())
+def slugify_erp(erp: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "-", erp).strip("-")
 
-    stored_week = None
-    if marker_path.exists():
-        try:
-            stored_week = date.fromisoformat(marker_path.read_text(encoding="utf-8").strip())
-        except ValueError:
-            stored_week = None
 
-    if stored_week is not None and stored_week < current_week:
-        removed = 0
-        for partial in partials_dir.glob("lote_*.json"):
-            partial.unlink()
+def device_cache_path(cache_dir: Path, erp: str, week: date) -> Path:
+    iso_year, iso_week, _ = week.isocalendar()
+    return cache_dir / f"{slugify_erp(erp)}_{iso_year}-W{iso_week:02d}.json"
+
+
+def prune_stale_weeks(cache_dir: Path, current_week: date) -> int:
+    """Remove entradas de semanas anteriores à atual. Retorna quantas."""
+    _, current_iso_week, _ = current_week.isocalendar()
+    current_year, _, _ = current_week.isocalendar()
+    current_tag = f"{current_year}-W{current_iso_week:02d}"
+    removed = 0
+    for cached in cache_dir.glob("*.json"):
+        if current_tag not in cached.name:
+            cached.unlink()
             removed += 1
-        print(f"[cache] nova semana (sábado {current_week}) — {removed} lote(s) em cache limpo(s)")
-
-    marker_path.write_text(current_week.isoformat(), encoding="utf-8")
+    return removed
 
 
 # --------------------------------------------------------------------------
@@ -490,10 +485,13 @@ def main() -> int:
     args = ap.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    partials_dir = args.output_dir / "partials"
-    partials_dir.mkdir(exist_ok=True)
+    cache_dir = args.output_dir / "cache"
+    cache_dir.mkdir(exist_ok=True)
     (args.output_dir / "metrics").mkdir(exist_ok=True)
-    reset_cache_if_new_week(partials_dir)
+    current_week = _last_saturday(datetime.now(timezone.utc).date())
+    removed = prune_stale_weeks(cache_dir, current_week)
+    if removed:
+        print(f"[cache] nova semana (sábado {current_week}) — {removed} entrada(s) antiga(s) removida(s)")
 
     devices = read_devices(args.input, somente_ativos=not args.todos, limite=args.limite)
     batches = [devices[i:i + args.lote] for i in range(0, len(devices), args.lote)]
@@ -515,33 +513,44 @@ def main() -> int:
 
     try:
         for i, batch in enumerate(batches, start=1):
-            partial = partials_dir / f"lote_{i:04d}.json"
+            pending = [d for d in batch
+                       if not device_cache_path(cache_dir, d.erp, current_week).exists()]
+            cached_devices = [d for d in batch if d not in pending]
 
-            if partial.exists():  # retomada
-                payload = json.loads(partial.read_text(encoding="utf-8"))
-                print(f"[{i}/{len(batches)}] cache")
-            else:
-                print(f"[{i}/{len(batches)}] {', '.join(d.name for d in batch)}")
-                try:
-                    payload = run_claude_batch(batch, args.model, args.timeout)
-                    partial.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
-                                       encoding="utf-8")
-                    row = {"lote_idx": i, "n_dispositivos": len(batch), **payload["_meta"]}
-                    metric_rows.append(row)
-                    write_lote_metrics(
-                        args.output_dir / "metrics" / f"rodada_{collected_at}.csv",
-                        lote_idx=i, n_dispositivos=len(batch), meta=payload["_meta"],
-                    )
-                except Exception as exc:  # noqa: BLE001 — um lote ruim não derruba a rodada
-                    msg = f"lote {i}: {exc}"
-                    print(f"    FALHA: {msg}", file=sys.stderr)
-                    failures.append(msg)
-                    time.sleep(args.pausa * 4)
-                    continue
+            for device in cached_devices:
+                cache_path = device_cache_path(cache_dir, device.erp, current_week)
+                entry = json.loads(cache_path.read_text(encoding="utf-8"))
+                results[device.erp] = compute_stats(entry.get("anuncios", []))
+                # Nota (revisada na Task 10): compute_stats ainda recebe a lista de
+                # anúncios aqui, não o `entry` inteiro — a assinatura só muda na Task 10.
+
+            if not pending:
+                print(f"[{i}/{len(batches)}] cache (todos os {len(batch)} dispositivos)")
+                continue
+
+            print(f"[{i}/{len(batches)}] {', '.join(d.name for d in pending)}")
+            try:
+                payload = run_claude_batch(pending, args.model, args.timeout)
+                row = {"lote_idx": i, "n_dispositivos": len(pending), **payload["_meta"]}
+                metric_rows.append(row)
+                write_lote_metrics(
+                    args.output_dir / "metrics" / f"rodada_{collected_at}.csv",
+                    lote_idx=i, n_dispositivos=len(pending), meta=payload["_meta"],
+                )
+            except Exception as exc:  # noqa: BLE001 — um lote ruim não derruba a rodada
+                msg = f"lote {i}: {exc}"
+                print(f"    FALHA: {msg}", file=sys.stderr)
+                failures.append(msg)
+                time.sleep(args.pausa * 4)
+                continue
 
             for entry in payload.get("resultados", []):
-                st = compute_stats(entry.get("anuncios", []))
-                results[str(entry.get("erp_code"))] = st
+                erp = str(entry.get("erp_code"))
+                st = compute_stats(entry.get("anuncios", []))  # Task 10 troca para compute_stats(entry)
+                results[erp] = st
+                device_cache_path(cache_dir, erp, current_week).write_text(
+                    json.dumps(entry, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
 
             time.sleep(args.pausa)
 
@@ -579,7 +588,7 @@ def main() -> int:
         return 130
     except Exception as exc:  # noqa: BLE001
         notify_slack(f":rotating_light: Rodada ABORTOU: `{exc}`\n"
-                     f"Checkpoint em `{partials_dir}` — rode de novo para retomar.")
+                     f"Checkpoint em `{cache_dir}` — rode de novo para retomar.")
         raise
 
 

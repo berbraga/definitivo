@@ -126,3 +126,20 @@ def test_build_prompt_stays_under_token_budget():
     # a medição real de tokens vem do usage.input_tokens na Task 5/8.
     approx_tokens = len(prompt) / 4
     assert approx_tokens < 3000, f"~{approx_tokens:.0f} tokens, meta é <3000"
+
+
+def test_device_cache_path_uses_slug_and_iso_week(tmp_path):
+    from datetime import date
+    from run_market_scan import device_cache_path
+
+    path = device_cache_path(tmp_path, erp="20023A0", week=date(2026, 8, 1))
+    assert path.parent == tmp_path
+    assert "20023A0" in path.name
+    assert "2026-W" in path.name
+    assert path.suffix == ".json"
+
+
+def test_slugify_erp_keeps_alphanumeric_only():
+    from run_market_scan import slugify_erp
+    assert slugify_erp("20023A0") == "20023A0"
+    assert slugify_erp("AB/CD 12") == "AB-CD-12"
