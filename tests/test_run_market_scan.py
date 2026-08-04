@@ -2,6 +2,8 @@ import csv
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from run_market_scan import Device, run_claude_batch
 
 
@@ -162,3 +164,22 @@ def test_compute_stats_defaults_sources_queried_to_empty_list_when_absent():
     from run_market_scan import compute_stats
     stats = compute_stats({"anuncios": []})
     assert stats.sources_queried == []
+
+
+def test_median_divergence_pct_flags_devices_over_threshold():
+    from run_market_scan import median_divergence_pct
+
+    baseline = {"A": 1000.0, "B": 500.0, "C": 200.0}
+    current = {"A": 1030.0, "B": 800.0, "C": 200.0}  # +3%, +60%, +0%
+
+    diffs = median_divergence_pct(baseline, current)
+
+    assert diffs["A"] == pytest.approx(3.0, abs=0.1)
+    assert diffs["B"] == pytest.approx(60.0, abs=0.1)
+    assert diffs["C"] == 0.0
+
+
+def test_median_divergence_pct_skips_devices_missing_in_either_side():
+    from run_market_scan import median_divergence_pct
+    diffs = median_divergence_pct({"A": 100.0}, {"B": 100.0})
+    assert diffs == {}

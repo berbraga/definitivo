@@ -374,6 +374,15 @@ def compute_stats(entry: dict) -> Stats:
     )
 
 
+def median_divergence_pct(baseline: dict[str, float], current: dict[str, float]) -> dict[str, float]:
+    diffs = {}
+    for erp, base_value in baseline.items():
+        if erp not in current or not base_value:
+            continue
+        diffs[erp] = abs(current[erp] - base_value) / base_value * 100
+    return diffs
+
+
 # --------------------------------------------------------------------------
 # Escrita do resultado
 # --------------------------------------------------------------------------
