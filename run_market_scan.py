@@ -21,6 +21,7 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import re
@@ -293,6 +294,26 @@ def extract_json(text: str) -> dict:
     return json.loads(text[start:end + 1])
 
 
+METRICS_FIELDS = [
+    "lote_idx", "n_dispositivos", "input_tokens", "output_tokens",
+    "cache_creation_input_tokens", "cache_read_input_tokens",
+    "total_cost_usd", "num_turns", "duracao_s",
+]
+
+
+def write_lote_metrics(csv_path: Path, lote_idx: int, n_dispositivos: int, meta: dict) -> None:
+    """Uma linha por lote. Cria o header na primeira chamada da rodada."""
+    is_new = not csv_path.exists()
+    row = {"lote_idx": lote_idx, "n_dispositivos": n_dispositivos, **{
+        k: meta.get(k) for k in METRICS_FIELDS if k not in ("lote_idx", "n_dispositivos")
+    }}
+    with csv_path.open("a", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=METRICS_FIELDS)
+        if is_new:
+            writer.writeheader()
+        writer.writerow(row)
+
+
 # --------------------------------------------------------------------------
 # Estatística (Python, nunca o modelo)
 # --------------------------------------------------------------------------
@@ -460,6 +481,7 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     partials_dir = args.output_dir / "partials"
     partials_dir.mkdir(exist_ok=True)
+    (args.output_dir / "metrics").mkdir(exist_ok=True)
     reset_cache_if_new_week(partials_dir)
 
     devices = read_devices(args.input, somente_ativos=not args.todos, limite=args.limite)
@@ -492,6 +514,10 @@ def main() -> int:
                     payload = run_claude_batch(batch, args.model, args.timeout)
                     partial.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
                                        encoding="utf-8")
+                    write_lote_metrics(
+                        args.output_dir / "metrics" / f"rodada_{collected_at}.csv",
+                        lote_idx=i, n_dispositivos=len(batch), meta=payload["_meta"],
+                    )
                 except Exception as exc:  # noqa: BLE001 — um lote ruim não derruba a rodada
                     msg = f"lote {i}: {exc}"
                     print(f"    FALHA: {msg}", file=sys.stderr)

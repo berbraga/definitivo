@@ -1,3 +1,4 @@
+import csv
 import json
 from unittest.mock import MagicMock, patch
 
@@ -47,3 +48,28 @@ def test_run_claude_batch_captures_usage_and_cost_in_meta():
     # campos já existentes não podem desaparecer
     assert meta["session_id"] == "sess-1"
     assert meta["num_turns"] == 3
+
+
+def test_write_lote_metrics_creates_header_once_and_appends(tmp_path):
+    from run_market_scan import write_lote_metrics
+
+    csv_path = tmp_path / "rodada.csv"
+    meta_1 = {
+        "input_tokens": 9, "output_tokens": 185,
+        "cache_creation_input_tokens": 10488, "cache_read_input_tokens": 20736,
+        "total_cost_usd": 0.0239836, "num_turns": 3, "duracao_s": 2.9,
+    }
+    meta_2 = {**meta_1, "total_cost_usd": 0.05, "num_turns": 26}
+
+    write_lote_metrics(csv_path, lote_idx=1, n_dispositivos=8, meta=meta_1)
+    write_lote_metrics(csv_path, lote_idx=2, n_dispositivos=8, meta=meta_2)
+
+    with csv_path.open(encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+
+    assert len(rows) == 2
+    assert rows[0]["lote_idx"] == "1"
+    assert rows[0]["n_dispositivos"] == "8"
+    assert rows[0]["total_cost_usd"] == "0.0239836"
+    assert rows[1]["lote_idx"] == "2"
+    assert rows[1]["num_turns"] == "26"
