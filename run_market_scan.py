@@ -32,7 +32,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -44,7 +44,7 @@ from openpyxl import load_workbook
 HEADER_ROW = 2          # linha 1 = texto de ajuda do template; linha 2 = cabeçalho
 FIRST_DATA_ROW = 3
 COL_DEVICE, COL_MANUF, COL_MODEL = 1, 2, 3
-COL_STORAGE, COL_PRICE_INSTORE, COL_ERP = 5, 8, 19
+COL_STORAGE, COL_PRICE_INSTORE, COL_MAX_PRICE, COL_ERP = 5, 8, 18, 19
 
 PLACEHOLDER_PRICE = 10  # valor de item inativo/não comprado na tabela
 MIN_SAMPLE_OK = 5
@@ -56,13 +56,21 @@ NEW_COLUMNS = [
     "fontes", "coletado_em", "status",
 ]
 
-SOURCES = ["olx.com.br", "enjoei.com.br", "mercadolivre.com.br"]
+SOURCES = ["trocafy.com.br", "cellularstore.com.br", "mercadolivre.com.br"]
 
 PROMPT_TEMPLATE = """Você é um coletor de referência de preços de celulares seminovos no Brasil.
 
-Para CADA dispositivo da lista abaixo, use WebSearch (e WebFetch apenas quando
-precisar confirmar o preço na página) para encontrar anúncios de aparelhos
-USADOS ou SEMINOVOS à venda no Brasil, em: {sources}.
+Para CADA dispositivo da lista abaixo, use WebSearch para encontrar anúncios
+de aparelhos USADOS ou SEMINOVOS à venda no Brasil, em: {sources}.
+
+Extraia o preço APENAS do snippet/resumo retornado pela busca. Não abra
+páginas. Se o snippet não mostrar preço claro, descarte o anúncio.
+
+Faça NO MÁXIMO 1 busca (WebSearch) por dispositivo em cada uma das fontes
+listadas — no máximo {max_buscas_por_lote} chamadas de WebSearch no total
+para este lote inteiro. Não repita uma busca que já não trouxe resultado
+útil. Assim que tiver anúncios suficientes para um dispositivo, pare de
+buscar por ele e siga para o próximo.
 
 REGRAS DE ACEITE DE ANÚNCIO (aplicar antes de incluir):
 1. Modelo exato. O conjunto de qualificadores do título (pro, max, plus, mini,
@@ -218,12 +226,17 @@ def read_devices(path: Path, somente_ativos: bool, limite: int | None) -> list[D
 # Execução do Claude CLI
 # --------------------------------------------------------------------------
 
-def run_claude_batch(devices: list[Device], model: str, max_turns: int,
-                     timeout: int) -> dict:
-    """Uma invocação headless do CLI para um lote. Prompt vai por stdin."""
+def run_claude_batch(devices: list[Device], model: str, timeout: int) -> dict:
+    """Uma invocação headless do CLI para um lote. Prompt vai por stdin.
+
+    Sem --max-turns: a versão instalada do CLI (2.1.220) nao expõe essa
+    flag (confirmado em `claude --help`) — passá-la é ignorado em silêncio.
+    O limite de buscas por lote é imposto por instrução no próprio prompt.
+    """
     prompt = PROMPT_TEMPLATE.format(
         sources=", ".join(SOURCES),
-        max_por_dispositivo=12,
+        max_por_dispositivo=6,
+        max_buscas_por_lote=len(devices) * len(SOURCES),
         devices=json.dumps([d.as_query_dict() for d in devices],
                            ensure_ascii=False, indent=2),
     )
@@ -231,9 +244,9 @@ def run_claude_batch(devices: list[Device], model: str, max_turns: int,
     cmd = [
         "claude", "-p",
         "--output-format", "json",
-        "--allowedTools", "WebSearch,WebFetch",
-        "--max-turns", str(max_turns),
+        "--allowedTools", "WebSearch",
         "--model", model,
+        "--effort", "medium",
     ]
 
     started = time.monotonic()
@@ -328,7 +341,12 @@ def write_report(src: Path, dst: Path, devices: list[Device],
     wb = load_workbook(dst)
     ws = wb[wb.sheetnames[0]]
 
-    first_new = ws.max_column + 1
+    # Inserido logo depois de "Maximum Price" (não no fim da tabela) para
+    # ficar visualmente ao lado das colunas Minimum/Maximum Price do
+    # template, sem sobrescrever seu significado original (piso/teto de
+    # preço de recompra).
+    first_new = COL_MAX_PRICE + 1
+    ws.insert_cols(first_new, amount=len(NEW_COLUMNS))
     for offset, title in enumerate(NEW_COLUMNS):
         ws.cell(row=HEADER_ROW, column=first_new + offset, value=title)
 
@@ -380,6 +398,43 @@ def notify_slack(text: str) -> None:
 
 
 # --------------------------------------------------------------------------
+# Cache semanal (renova todo sábado)
+# --------------------------------------------------------------------------
+
+CACHE_WEEK_MARKER = ".cache_week"
+
+
+def _last_saturday(today: date) -> date:
+    """Sábado da semana corrente (hoje, se hoje já for sábado)."""
+    days_since_saturday = (today.weekday() - 5) % 7  # Monday=0 .. Saturday=5
+    return today - timedelta(days=days_since_saturday)
+
+
+def reset_cache_if_new_week(partials_dir: Path) -> None:
+    """Limpa os lotes em cache (partials/lote_*.json) uma vez por semana,
+    na virada de sábado — assim o scraper não fica reaproveitando preço
+    de mercado de semanas atrás indefinidamente."""
+    marker_path = partials_dir / CACHE_WEEK_MARKER
+    current_week = _last_saturday(datetime.now(timezone.utc).date())
+
+    stored_week = None
+    if marker_path.exists():
+        try:
+            stored_week = date.fromisoformat(marker_path.read_text(encoding="utf-8").strip())
+        except ValueError:
+            stored_week = None
+
+    if stored_week is not None and stored_week < current_week:
+        removed = 0
+        for partial in partials_dir.glob("lote_*.json"):
+            partial.unlink()
+            removed += 1
+        print(f"[cache] nova semana (sábado {current_week}) — {removed} lote(s) em cache limpo(s)")
+
+    marker_path.write_text(current_week.isoformat(), encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------
 
@@ -389,8 +444,7 @@ def main() -> int:
     ap.add_argument("--output-dir", type=Path, default=Path("out"))
     ap.add_argument("--lote", type=int, default=8, help="dispositivos por invocação")
     ap.add_argument("--limite", type=int, default=None)
-    ap.add_argument("--model", default="sonnet")
-    ap.add_argument("--max-turns", type=int, default=40)
+    ap.add_argument("--model", default="claude-sonnet-5")
     ap.add_argument("--timeout", type=int, default=900, help="segundos por lote")
     ap.add_argument("--pausa", type=float, default=5.0, help="segundos entre lotes")
     ap.add_argument("--todos", action="store_true", help="inclui itens inativos (preço 10)")
@@ -400,6 +454,7 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     partials_dir = args.output_dir / "partials"
     partials_dir.mkdir(exist_ok=True)
+    reset_cache_if_new_week(partials_dir)
 
     devices = read_devices(args.input, somente_ativos=not args.todos, limite=args.limite)
     batches = [devices[i:i + args.lote] for i in range(0, len(devices), args.lote)]
@@ -428,8 +483,7 @@ def main() -> int:
             else:
                 print(f"[{i}/{len(batches)}] {', '.join(d.name for d in batch)}")
                 try:
-                    payload = run_claude_batch(batch, args.model, args.max_turns,
-                                               args.timeout)
+                    payload = run_claude_batch(batch, args.model, args.timeout)
                     partial.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
                                        encoding="utf-8")
                 except Exception as exc:  # noqa: BLE001 — um lote ruim não derruba a rodada

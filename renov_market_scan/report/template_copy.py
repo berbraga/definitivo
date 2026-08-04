@@ -61,12 +61,19 @@ def write_template_copy(
     workbook = load_workbook(destination_path)
     try:
         sheet = workbook[find_data_sheet(workbook)]
-        first_extra = len(EXPECTED_HEADER) + 1
+
+        # Inserted right after "Maximum Price" (not appended past "ERP Code")
+        # so the market-research columns sit next to the template's own
+        # Minimum/Maximum Price columns for easy visual comparison. Those two
+        # columns keep their original meaning (buyback price floor/ceiling)
+        # untouched — only columns to their right shift over.
+        first_extra = EXPECTED_HEADER.index("Maximum Price") + 2
+        sheet.insert_cols(first_extra, amount=len(EXTRA_COLUMNS))
 
         for offset, name in enumerate(EXTRA_COLUMNS):
             sheet.cell(row=HEADER_ROW, column=first_extra + offset).value = name
 
-        erp_index = EXPECTED_HEADER.index("ERP Code") + 1
+        erp_index = EXPECTED_HEADER.index("ERP Code") + 1 + len(EXTRA_COLUMNS)
         model_index = EXPECTED_HEADER.index("Model*") + 1
         storage_index = EXPECTED_HEADER.index("Storage, GB*") + 1
 

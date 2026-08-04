@@ -90,9 +90,11 @@ VALID_CONDITIONS: frozenset[str] = frozenset({"novo", "seminovo", "usado", "desc
 SEARCH_PROMPT_TEMPLATE = (
     "Voce e um coletor de referencia de precos de celulares seminovos no "
     "Brasil.\n\n"
-    "Use WebSearch (e WebFetch apenas quando precisar confirmar o preco na "
-    "pagina) para encontrar anuncios de aparelhos USADOS ou SEMINOVOS a "
-    "venda no dominio {domain}, usando estas frases de busca: {phrases}.\n\n"
+    "Use WebSearch para encontrar anuncios de aparelhos USADOS ou SEMINOVOS "
+    "a venda no dominio {domain}, usando estas frases de busca: {phrases}.\n\n"
+    "Extraia o preco APENAS do snippet/resumo retornado pela busca. Nao "
+    "abra paginas. Se o snippet nao mostrar preco claro, descarte o "
+    "anuncio.\n\n"
     "REGRAS DE ACEITE DE ANUNCIO (aplicar antes de incluir):\n"
     "1. Descarte acessorios e pecas: capa, capinha, case, pelicula, vidro, "
     "tela, display, touch, bateria, placa, flex, conector, carcaca, aro, "
@@ -192,7 +194,7 @@ class ClaudeCliAdapter:
         cmd = [
             "claude", "-p",
             "--output-format", "json",
-            "--allowedTools", "WebSearch,WebFetch",
+            "--allowedTools", "WebSearch",
             "--model", self._settings.model,
         ]
 
