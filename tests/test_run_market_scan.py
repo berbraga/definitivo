@@ -115,3 +115,14 @@ def test_build_prompt_stable_prefix_is_identical_regardless_of_batch_size():
     prefix_7 = prompt_7[: prompt_7.index(marker)]
 
     assert prefix_8 == prefix_7
+
+
+def test_build_prompt_stays_under_token_budget():
+    from run_market_scan import build_prompt
+
+    devices = [make_device(erp=f"E{i}", row=i) for i in range(8)]
+    prompt = build_prompt(devices)
+    # aproximação grosseira (chars/4) só pra travar regressão de tamanho;
+    # a medição real de tokens vem do usage.input_tokens na Task 5/8.
+    approx_tokens = len(prompt) / 4
+    assert approx_tokens < 3000, f"~{approx_tokens:.0f} tokens, meta é <3000"

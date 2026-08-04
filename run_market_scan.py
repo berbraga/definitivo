@@ -61,43 +61,32 @@ SOURCES = ["trocafy.com.br", "cellularstore.com.br", "mercadolivre.com.br"]
 
 PROMPT_TEMPLATE = """Você é um coletor de referência de preços de celulares seminovos no Brasil.
 
-Para CADA dispositivo da lista abaixo, use WebSearch para encontrar anúncios
-de aparelhos USADOS ou SEMINOVOS à venda no Brasil, em: {sources}.
+Para CADA dispositivo, use WebSearch (fontes: {sources}) para achar anúncios
+de aparelhos USADOS/SEMINOVOS. Extraia o preço só do snippet da busca — não
+abra páginas; sem preço claro no snippet, descarte o anúncio.
 
-Extraia o preço APENAS do snippet/resumo retornado pela busca. Não abra
-páginas. Se o snippet não mostrar preço claro, descarte o anúncio.
+No máximo 1 busca por dispositivo/fonte. Não repita busca sem resultado útil;
+com anúncios suficientes para um dispositivo, siga para o próximo.
 
-Faça NO MÁXIMO 1 busca (WebSearch) por dispositivo em cada uma das fontes
-listadas. Não repita uma busca que já não trouxe resultado útil. Assim que
-tiver anúncios suficientes para um dispositivo, pare de buscar por ele e
-siga para o próximo.
-
-REGRAS DE ACEITE DE ANÚNCIO (aplicar antes de incluir):
-1. Modelo exato. O conjunto de qualificadores do título (pro, max, plus, mini,
-   ultra, neo, fusion, lite, fe, se, power, play, air) deve ser IGUAL ao do
-   modelo alvo. "iPhone 13" NÃO aceita "iPhone 13 Pro Max" e vice-versa.
-   "5g" é tolerado como opcional.
-2. Capacidade explícita no título ou na URL, igual à do alvo (1024 = 1TB).
-   Sem capacidade explícita, descarte.
+REGRAS DE ACEITE:
+1. Qualificador do título (pro/max/plus/mini/ultra/neo/fusion/lite/fe/se/
+   power/play/air) IGUAL ao alvo. "13" não aceita "13 Pro Max". "5g" opcional.
+2. Capacidade explícita (título ou URL) igual ao alvo (1024=1TB); sem isso, descarte.
 3. Descarte acessórios e peças: capa, capinha, case, película, vidro, tela,
    display, touch, bateria, placa, flex, conector, carcaça, aro, tampa,
    câmera, alto-falante, botão, "para retirada", "não liga", réplica, clone,
    similar, carregador, fone, cabo, chip, suporte.
-4. Preço À VISTA. Rejeite valor precedido de "12x", "10 x", "sem juros".
-   Converta "R$ 1.234,56" para 1234.56 (número, ponto decimal).
-5. Descarte "novo"/"lacrado". Aceite: seminovo, usado, vitrine, recondicionado.
-6. No máximo {max_por_dispositivo} anúncios por dispositivo, de fontes variadas.
+4. Preço à vista — rejeite "12x"/"sem juros". "R$ 1.234,56" → 1234.56 (float).
+5. Descarte "novo"/"lacrado"; aceite seminovo/usado/vitrine/recondicionado.
+6. Máximo 6 anúncios por dispositivo, fontes variadas.
 
-RESPONDA APENAS COM JSON, sem markdown, sem code fence, sem preâmbulo:
-{{"resultados":[{{"erp_code":"...","anuncios":[{{"fonte":"olx","titulo":"...",
-"preco_brl":1234.56,"condicao":"usado","url":"https://..."}}],"observacao":""}}]}}
+JSON puro, sem markdown:
+{{"resultados":[{{"erp_code":"...","anuncios":[{{"fonte":"...","titulo":"...","preco_brl":0.0,"condicao":"usado","url":"..."}}],"observacao":""}}]}}
 
-Se não achar nada válido para um dispositivo, devolva "anuncios": [] e explique
-em "observacao". NÃO calcule mediana, mínimo ou máximo. NÃO edite arquivos.
-NÃO faça perguntas — não há ninguém para responder.
+Sem dado válido: "anuncios":[] + "observacao". Não calcule mediana/min/max.
+Não edite arquivos. Não faça perguntas.
 
-DISPOSITIVOS:
-(máximo {max_buscas_por_lote} chamadas de WebSearch no total para este lote)
+DISPOSITIVOS: (máx {max_buscas_por_lote} buscas totais neste lote)
 {devices}
 """
 
@@ -230,7 +219,6 @@ def read_devices(path: Path, somente_ativos: bool, limite: int | None) -> list[D
 def build_prompt(devices: list[Device]) -> str:
     return PROMPT_TEMPLATE.format(
         sources=", ".join(SOURCES),
-        max_por_dispositivo=6,
         max_buscas_por_lote=len(devices) * len(SOURCES),
         devices=json.dumps([d.as_query_dict() for d in devices],
                            ensure_ascii=False, indent=2),
