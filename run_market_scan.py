@@ -21,6 +21,7 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import re
@@ -60,43 +61,35 @@ SOURCES = ["trocafy.com.br", "cellularstore.com.br", "mercadolivre.com.br"]
 
 PROMPT_TEMPLATE = """Você é um coletor de referência de preços de celulares seminovos no Brasil.
 
-Para CADA dispositivo da lista abaixo, use WebSearch para encontrar anúncios
-de aparelhos USADOS ou SEMINOVOS à venda no Brasil, em: {sources}.
+Para CADA dispositivo, use WebSearch (fontes: {sources}) para achar anúncios
+de aparelhos USADOS/SEMINOVOS. Extraia o preço só do snippet da busca — não
+abra páginas; sem preço claro no snippet, descarte o anúncio.
 
-Extraia o preço APENAS do snippet/resumo retornado pela busca. Não abra
-páginas. Se o snippet não mostrar preço claro, descarte o anúncio.
+No máximo 1 busca por dispositivo/fonte. Não repita busca sem resultado útil.
+Não pare de buscar um dispositivo até ter pelo menos 5 anúncios válidos no
+total (somando as fontes) ou ter esgotado todas as fontes listadas para ele.
+Só pule uma fonte específica (não o dispositivo inteiro) se ela já sozinha
+rendeu 5+ anúncios válidos para aquele dispositivo.
 
-Faça NO MÁXIMO 1 busca (WebSearch) por dispositivo em cada uma das fontes
-listadas — no máximo {max_buscas_por_lote} chamadas de WebSearch no total
-para este lote inteiro. Não repita uma busca que já não trouxe resultado
-útil. Assim que tiver anúncios suficientes para um dispositivo, pare de
-buscar por ele e siga para o próximo.
-
-REGRAS DE ACEITE DE ANÚNCIO (aplicar antes de incluir):
-1. Modelo exato. O conjunto de qualificadores do título (pro, max, plus, mini,
-   ultra, neo, fusion, lite, fe, se, power, play, air) deve ser IGUAL ao do
-   modelo alvo. "iPhone 13" NÃO aceita "iPhone 13 Pro Max" e vice-versa.
-   "5g" é tolerado como opcional.
-2. Capacidade explícita no título ou na URL, igual à do alvo (1024 = 1TB).
-   Sem capacidade explícita, descarte.
+REGRAS DE ACEITE:
+1. Qualificador do título (pro/max/plus/mini/ultra/neo/fusion/lite/fe/se/
+   power/play/air) IGUAL ao alvo. "13" não aceita "13 Pro Max". "5g" opcional.
+2. Capacidade explícita (título ou URL) igual ao alvo (1024=1TB); sem isso, descarte.
 3. Descarte acessórios e peças: capa, capinha, case, película, vidro, tela,
    display, touch, bateria, placa, flex, conector, carcaça, aro, tampa,
    câmera, alto-falante, botão, "para retirada", "não liga", réplica, clone,
    similar, carregador, fone, cabo, chip, suporte.
-4. Preço À VISTA. Rejeite valor precedido de "12x", "10 x", "sem juros".
-   Converta "R$ 1.234,56" para 1234.56 (número, ponto decimal).
-5. Descarte "novo"/"lacrado". Aceite: seminovo, usado, vitrine, recondicionado.
-6. No máximo {max_por_dispositivo} anúncios por dispositivo, de fontes variadas.
+4. Preço à vista — rejeite "12x"/"sem juros". "R$ 1.234,56" → 1234.56 (float).
+5. Descarte "novo"/"lacrado"; aceite seminovo/usado/vitrine/recondicionado.
+6. Máximo 6 anúncios por dispositivo, fontes variadas.
 
-RESPONDA APENAS COM JSON, sem markdown, sem code fence, sem preâmbulo:
-{{"resultados":[{{"erp_code":"...","anuncios":[{{"fonte":"olx","titulo":"...",
-"preco_brl":1234.56,"condicao":"usado","url":"https://..."}}],"observacao":""}}]}}
+JSON puro, sem markdown:
+{{"resultados":[{{"erp_code":"...","anuncios":[{{"fonte":"...","titulo":"...","preco_brl":0.0,"condicao":"usado","url":"..."}}],"fontes_consultadas":["..."],"observacao":""}}]}}
 
-Se não achar nada válido para um dispositivo, devolva "anuncios": [] e explique
-em "observacao". NÃO calcule mediana, mínimo ou máximo. NÃO edite arquivos.
-NÃO faça perguntas — não há ninguém para responder.
+Sem dado válido: "anuncios":[] + "observacao". Não calcule mediana/min/max.
+Não edite arquivos. Não faça perguntas.
 
-DISPOSITIVOS:
+DISPOSITIVOS: (máx {max_buscas_por_lote} buscas totais neste lote)
 {devices}
 """
 
@@ -141,6 +134,7 @@ class Stats:
     sources: str = ""
     status: str = "sem_dados"
     listings: list[dict] = field(default_factory=list)
+    sources_queried: list[str] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------
@@ -226,6 +220,15 @@ def read_devices(path: Path, somente_ativos: bool, limite: int | None) -> list[D
 # Execução do Claude CLI
 # --------------------------------------------------------------------------
 
+def build_prompt(devices: list[Device]) -> str:
+    return PROMPT_TEMPLATE.format(
+        sources=", ".join(SOURCES),
+        max_buscas_por_lote=len(devices) * len(SOURCES),
+        devices=json.dumps([d.as_query_dict() for d in devices],
+                           ensure_ascii=False, indent=2),
+    )
+
+
 def run_claude_batch(devices: list[Device], model: str, timeout: int) -> dict:
     """Uma invocação headless do CLI para um lote. Prompt vai por stdin.
 
@@ -233,13 +236,7 @@ def run_claude_batch(devices: list[Device], model: str, timeout: int) -> dict:
     flag (confirmado em `claude --help`) — passá-la é ignorado em silêncio.
     O limite de buscas por lote é imposto por instrução no próprio prompt.
     """
-    prompt = PROMPT_TEMPLATE.format(
-        sources=", ".join(SOURCES),
-        max_por_dispositivo=6,
-        max_buscas_por_lote=len(devices) * len(SOURCES),
-        devices=json.dumps([d.as_query_dict() for d in devices],
-                           ensure_ascii=False, indent=2),
-    )
+    prompt = build_prompt(devices)
 
     cmd = [
         "claude", "-p",
@@ -267,10 +264,16 @@ def run_claude_batch(devices: list[Device], model: str, timeout: int) -> dict:
         raise RuntimeError(f"claude reportou erro: {str(envelope)[:500]}")
 
     payload = extract_json(envelope.get("result", ""))
+    usage = envelope.get("usage") or {}
     payload["_meta"] = {
         "session_id": envelope.get("session_id"),
         "duracao_s": round(elapsed, 1),
         "num_turns": envelope.get("num_turns"),
+        "total_cost_usd": envelope.get("total_cost_usd"),
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
+        "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
     }
     return payload
 
@@ -287,11 +290,52 @@ def extract_json(text: str) -> dict:
     return json.loads(text[start:end + 1])
 
 
+METRICS_FIELDS = [
+    "lote_idx", "n_dispositivos", "input_tokens", "output_tokens",
+    "cache_creation_input_tokens", "cache_read_input_tokens",
+    "total_cost_usd", "num_turns", "duracao_s",
+]
+
+
+def write_lote_metrics(csv_path: Path, lote_idx: int, n_dispositivos: int, meta: dict) -> None:
+    """Uma linha por lote. Cria o header na primeira chamada da rodada."""
+    is_new = not csv_path.exists()
+    row = {"lote_idx": lote_idx, "n_dispositivos": n_dispositivos, **{
+        k: meta.get(k) for k in METRICS_FIELDS if k not in ("lote_idx", "n_dispositivos")
+    }}
+    with csv_path.open("a", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=METRICS_FIELDS)
+        if is_new:
+            writer.writeheader()
+        writer.writerow(row)
+
+
+def summarize_costs(metric_rows: list[dict]) -> dict:
+    """Agrega as linhas de metrics/rodada_*.csv (ou os _meta em memória)
+    de uma rodada inteira num resumo único."""
+    total_input = sum(r.get("input_tokens") or 0 for r in metric_rows)
+    total_output = sum(r.get("output_tokens") or 0 for r in metric_rows)
+    total_cache_creation = sum(r.get("cache_creation_input_tokens") or 0 for r in metric_rows)
+    total_cache_read = sum(r.get("cache_read_input_tokens") or 0 for r in metric_rows)
+    total_cost = sum(r.get("total_cost_usd") or 0 for r in metric_rows)
+    denom = total_input + total_output
+    return {
+        "total_cost_usd": round(total_cost, 4),
+        "total_input": total_input,
+        "total_output": total_output,
+        "total_cache_creation": total_cache_creation,
+        "total_cache_read": total_cache_read,
+        "cache_read_ratio": (total_cache_read / denom) if denom else 0.0,
+    }
+
+
 # --------------------------------------------------------------------------
 # Estatística (Python, nunca o modelo)
 # --------------------------------------------------------------------------
 
-def compute_stats(listings: list[dict]) -> Stats:
+def compute_stats(entry: dict) -> Stats:
+    listings = entry.get("anuncios", [])
+    sources_queried = entry.get("fontes_consultadas", [])
     valid = []
     for item in listings:
         try:
@@ -303,7 +347,7 @@ def compute_stats(listings: list[dict]) -> Stats:
         valid.append({**item, "preco_brl": price})
 
     if not valid:
-        return Stats(status="sem_dados")
+        return Stats(status="sem_dados", sources_queried=sources_queried)
 
     prices = sorted(v["preco_brl"] for v in valid)
     if len(prices) >= 4:
@@ -327,7 +371,17 @@ def compute_stats(listings: list[dict]) -> Stats:
         sources=", ".join(sorted({str(v.get("fonte", "?")) for v in valid})),
         status=status,
         listings=valid,
+        sources_queried=sources_queried,
     )
+
+
+def median_divergence_pct(baseline: dict[str, float], current: dict[str, float]) -> dict[str, float]:
+    diffs = {}
+    for erp, base_value in baseline.items():
+        if erp not in current or not base_value:
+            continue
+        diffs[erp] = abs(current[erp] - base_value) / base_value * 100
+    return diffs
 
 
 # --------------------------------------------------------------------------
@@ -398,11 +452,8 @@ def notify_slack(text: str) -> None:
 
 
 # --------------------------------------------------------------------------
-# Cache semanal (renova todo sábado)
+# Cache por dispositivo + semana (renova todo sábado)
 # --------------------------------------------------------------------------
-
-CACHE_WEEK_MARKER = ".cache_week"
-
 
 def _last_saturday(today: date) -> date:
     """Sábado da semana corrente (hoje, se hoje já for sábado)."""
@@ -410,28 +461,92 @@ def _last_saturday(today: date) -> date:
     return today - timedelta(days=days_since_saturday)
 
 
-def reset_cache_if_new_week(partials_dir: Path) -> None:
-    """Limpa os lotes em cache (partials/lote_*.json) uma vez por semana,
-    na virada de sábado — assim o scraper não fica reaproveitando preço
-    de mercado de semanas atrás indefinidamente."""
-    marker_path = partials_dir / CACHE_WEEK_MARKER
-    current_week = _last_saturday(datetime.now(timezone.utc).date())
+def slugify_erp(erp: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "-", erp).strip("-")
 
-    stored_week = None
-    if marker_path.exists():
-        try:
-            stored_week = date.fromisoformat(marker_path.read_text(encoding="utf-8").strip())
-        except ValueError:
-            stored_week = None
 
-    if stored_week is not None and stored_week < current_week:
-        removed = 0
-        for partial in partials_dir.glob("lote_*.json"):
-            partial.unlink()
+def device_cache_path(cache_dir: Path, erp: str, week: date) -> Path:
+    iso_year, iso_week, _ = week.isocalendar()
+    return cache_dir / f"{slugify_erp(erp)}_{iso_year}-W{iso_week:02d}.json"
+
+
+def prune_stale_weeks(cache_dir: Path, current_week: date) -> int:
+    """Remove entradas de semanas anteriores à atual. Retorna quantas."""
+    _, current_iso_week, _ = current_week.isocalendar()
+    current_year, _, _ = current_week.isocalendar()
+    current_tag = f"{current_year}-W{current_iso_week:02d}"
+    removed = 0
+    for cached in cache_dir.glob("*.json"):
+        if current_tag not in cached.name:
+            cached.unlink()
             removed += 1
-        print(f"[cache] nova semana (sábado {current_week}) — {removed} lote(s) em cache limpo(s)")
+    return removed
 
-    marker_path.write_text(current_week.isoformat(), encoding="utf-8")
+
+def match_pending_device(erp_code: str, pending: list[Device]) -> Device | None:
+    """Casa o erp_code devolvido pelo modelo com o Device pendente correto.
+
+    O modelo às vezes ecoa o erp_code com capitalização/formatação diferente
+    da planilha. Comparamos formas normalizadas (slugify_erp, case-insensitive)
+    para achar o Device original — cuja .erp (fonte confiável) deve ser usado
+    como chave, nunca a string devolvida pelo modelo.
+    """
+    target = slugify_erp(str(erp_code)).lower()
+    for device in pending:
+        if slugify_erp(device.erp).lower() == target:
+            return device
+    return None
+
+
+def process_batch(
+    batch: list[Device],
+    cache_dir: Path,
+    current_week: date,
+    model: str,
+    timeout: int,
+) -> tuple[dict[str, Stats], dict | None, bool]:
+    """Processa um lote: separa cache/pendentes, roda os pendentes, funde
+    resultados e grava cache (pulando resultados vazios — Finding 2).
+
+    Retorna (results_deste_lote, meta_da_chamada_ou_None, houve_chamada_claude).
+    Não grava métricas nem lança em caso de falha do claude — quem chama trata.
+    """
+    results: dict[str, Stats] = {}
+
+    pending = [d for d in batch
+               if not device_cache_path(cache_dir, d.erp, current_week).exists()]
+    cached_devices = [d for d in batch if d not in pending]
+
+    for device in cached_devices:
+        cache_path = device_cache_path(cache_dir, device.erp, current_week)
+        entry = json.loads(cache_path.read_text(encoding="utf-8"))
+        results[device.erp] = compute_stats(entry)
+
+    if not pending:
+        return results, None, False
+
+    payload = run_claude_batch(pending, model, timeout)
+
+    for entry in payload.get("resultados", []):
+        returned_erp = entry.get("erp_code")
+        device = match_pending_device(returned_erp, pending)
+        if device is None:
+            print(
+                f"    AVISO: erp_code '{returned_erp}' devolvido pelo modelo não "
+                f"corresponde a nenhum dispositivo pendente deste lote — descartado.",
+                file=sys.stderr,
+            )
+            continue
+
+        erp = device.erp
+        results[erp] = compute_stats(entry)
+
+        if entry.get("anuncios"):
+            device_cache_path(cache_dir, erp, current_week).write_text(
+                json.dumps(entry, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+
+    return results, payload["_meta"], True
 
 
 # --------------------------------------------------------------------------
@@ -452,9 +567,13 @@ def main() -> int:
     args = ap.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    partials_dir = args.output_dir / "partials"
-    partials_dir.mkdir(exist_ok=True)
-    reset_cache_if_new_week(partials_dir)
+    cache_dir = args.output_dir / "cache"
+    cache_dir.mkdir(exist_ok=True)
+    (args.output_dir / "metrics").mkdir(exist_ok=True)
+    current_week = _last_saturday(datetime.now(timezone.utc).date())
+    removed = prune_stale_weeks(cache_dir, current_week)
+    if removed:
+        print(f"[cache] nova semana (sábado {current_week}) — {removed} entrada(s) antiga(s) removida(s)")
 
     devices = read_devices(args.input, somente_ativos=not args.todos, limite=args.limite)
     batches = [devices[i:i + args.lote] for i in range(0, len(devices), args.lote)]
@@ -472,32 +591,41 @@ def main() -> int:
     collected_at = started.strftime("%Y-%m-%d")
     results: dict[str, Stats] = {}
     failures: list[str] = []
+    metric_rows: list[dict] = []
 
     try:
         for i, batch in enumerate(batches, start=1):
-            partial = partials_dir / f"lote_{i:04d}.json"
-
-            if partial.exists():  # retomada
-                payload = json.loads(partial.read_text(encoding="utf-8"))
-                print(f"[{i}/{len(batches)}] cache")
+            pending_names = [
+                d.name for d in batch
+                if not device_cache_path(cache_dir, d.erp, current_week).exists()
+            ]
+            if not pending_names:
+                print(f"[{i}/{len(batches)}] cache (todos os {len(batch)} dispositivos)")
             else:
-                print(f"[{i}/{len(batches)}] {', '.join(d.name for d in batch)}")
-                try:
-                    payload = run_claude_batch(batch, args.model, args.timeout)
-                    partial.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
-                                       encoding="utf-8")
-                except Exception as exc:  # noqa: BLE001 — um lote ruim não derruba a rodada
-                    msg = f"lote {i}: {exc}"
-                    print(f"    FALHA: {msg}", file=sys.stderr)
-                    failures.append(msg)
-                    time.sleep(args.pausa * 4)
-                    continue
+                print(f"[{i}/{len(batches)}] {', '.join(pending_names)}")
 
-            for entry in payload.get("resultados", []):
-                st = compute_stats(entry.get("anuncios", []))
-                results[str(entry.get("erp_code"))] = st
+            try:
+                batch_results, meta, called_claude = process_batch(
+                    batch, cache_dir, current_week, args.model, args.timeout,
+                )
+            except Exception as exc:  # noqa: BLE001 — um lote ruim não derruba a rodada
+                msg = f"lote {i}: {exc}"
+                print(f"    FALHA: {msg}", file=sys.stderr)
+                failures.append(msg)
+                time.sleep(args.pausa * 4)
+                continue
 
-            time.sleep(args.pausa)
+            results.update(batch_results)
+
+            if called_claude:
+                n_pending = len(pending_names)
+                row = {"lote_idx": i, "n_dispositivos": n_pending, **meta}
+                metric_rows.append(row)
+                write_lote_metrics(
+                    args.output_dir / "metrics" / f"rodada_{collected_at}.csv",
+                    lote_idx=i, n_dispositivos=n_pending, meta=meta,
+                )
+                time.sleep(args.pausa)
 
         out_xlsx = args.output_dir / f"referencia-mercado_{collected_at}.xlsx"
         write_report(args.input, out_xlsx, devices, results, collected_at)
@@ -514,6 +642,16 @@ def main() -> int:
             f"_Valores de anúncio (preço pedido), não de transação._"
         )
         print(summary)
+        cost = summarize_costs(metric_rows)
+        n_devices_for_cost = len(devices) or 1
+        print(
+            f"[custo] total US$ {cost['total_cost_usd']:.4f} · "
+            f"US$ {cost['total_cost_usd'] / n_devices_for_cost:.4f}/dispositivo · "
+            f"input {cost['total_input']} · output {cost['total_output']} · "
+            f"cache_creation {cost['total_cache_creation']} · "
+            f"cache_read {cost['total_cache_read']} · "
+            f"razao cache_read/(input+output) {cost['cache_read_ratio']:.1f}"
+        )
         notify_slack(summary)
         return 1 if failures else 0
 
@@ -523,7 +661,7 @@ def main() -> int:
         return 130
     except Exception as exc:  # noqa: BLE001
         notify_slack(f":rotating_light: Rodada ABORTOU: `{exc}`\n"
-                     f"Checkpoint em `{partials_dir}` — rode de novo para retomar.")
+                     f"Checkpoint em `{cache_dir}` — rode de novo para retomar.")
         raise
 
 
