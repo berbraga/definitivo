@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from run_market_scan import Device, run_claude_batch
+from run_market_scan import Device, notify_slack, run_claude_batch
 
 
 def fake_envelope(result_text: str, **usage_overrides) -> str:
@@ -364,19 +364,8 @@ def test_git_commit_and_push_extracts_date_from_iso_pattern():
     assert commit_cmd[msg_idx] == "chore(scan): atualiza referência de mercado 2026-08-05"
 
 
-from run_market_scan import notify_slack
-
-
 def test_notify_slack_posts_text_only_when_no_file(monkeypatch, capsys):
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
-    calls = []
-
-    def fake_urlopen(req, timeout=15):
-        calls.append(req.full_url)
-        response = MagicMock()
-        response.read.return_value = b'{"ok": true}'
-        response.status = 200
-        return response.__enter__() if hasattr(response, "__enter__") else response
 
     class FakeCtx:
         def __enter__(self):
@@ -392,7 +381,7 @@ def test_notify_slack_posts_text_only_when_no_file(monkeypatch, capsys):
         notify_slack(None, "rodada ok")
 
     out = capsys.readouterr().out
-    assert "enviado" in out.lower() or "slack" in out.lower()
+    assert "enviad" in out.lower()
 
 
 def test_notify_slack_skips_when_token_missing(monkeypatch, capsys):

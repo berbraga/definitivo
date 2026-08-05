@@ -521,6 +521,9 @@ def notify_slack(xlsx_path: Path | None, text: str, channel: str = "pricing-trad
         if not meta.get("ok"):
             raise RuntimeError(str(meta))
 
+        # Slack's upload_url accepts POST, not PUT, despite common REST
+        # convention for pre-signed upload URLs — verified against Slack's
+        # actual API behavior (their docs/examples use POST here).
         upload_req = urllib.request.Request(
             meta["upload_url"], data=file_bytes, method="POST",
         )
