@@ -271,3 +271,49 @@ def test_process_batch_cached_pending_split(tmp_path):
     assert written.exists()
     written_entry = json.loads(written.read_text(encoding="utf-8"))
     assert written_entry["erp_code"] == "AB-CD-12"  # conteúdo é o que o modelo mandou
+
+
+def test_git_commit_and_push_runs_add_commit_push_in_order():
+    from pathlib import Path
+    from run_market_scan import git_commit_and_push
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        git_commit_and_push(Path("out/referencia-mercado_2026-08-05.xlsx"))
+
+    assert calls[0][:2] == ["git", "add"]
+    assert calls[1][:2] == ["git", "commit"]
+    assert calls[2][:2] == ["git", "push"]
+    assert "feat/market-scan" in calls[2]
+
+
+def test_git_commit_and_push_raises_on_add_failure():
+    from pathlib import Path
+    from run_market_scan import git_commit_and_push
+
+    fake_proc = MagicMock(returncode=1, stdout="", stderr="fatal: pathspec")
+    with patch("subprocess.run", return_value=fake_proc):
+        with pytest.raises(RuntimeError, match="git add"):
+            git_commit_and_push(Path("out/referencia-mercado_2026-08-05.xlsx"))
+
+
+def test_git_commit_and_push_raises_on_push_failure():
+    from pathlib import Path
+    from run_market_scan import git_commit_and_push
+
+    calls = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        calls["n"] += 1
+        if cmd[:2] == ["git", "push"]:
+            return MagicMock(returncode=1, stdout="", stderr="rejected")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        with pytest.raises(RuntimeError, match="git push"):
+            git_commit_and_push(Path("out/referencia-mercado_2026-08-05.xlsx"))

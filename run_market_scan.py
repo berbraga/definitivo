@@ -433,6 +433,33 @@ def write_report(src: Path, dst: Path, devices: list[Device],
 
 
 # --------------------------------------------------------------------------
+# Git — commit e push automático do resultado
+# --------------------------------------------------------------------------
+
+def git_commit_and_push(xlsx_path: Path, branch: str = "feat/market-scan") -> None:
+    """Commita e envia o xlsx gerado direto na branch ativa.
+
+    Sem PR intermediário — decisão explícita para esta automação. Levanta
+    RuntimeError na primeira falha; quem chama decide se prossegue para o
+    Slack (não deve, numa rodada real: commit falho = nada para notificar).
+    """
+    def _run(cmd: list[str], step_name: str) -> None:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"{step_name} falhou (código {proc.returncode}): "
+                f"{(proc.stderr or proc.stdout or '').strip()[:500]}"
+            )
+
+    _run(["git", "add", str(xlsx_path)], "git add")
+    _run(
+        ["git", "commit", "-m", f"chore(scan): atualiza referência de mercado {xlsx_path.stem.split('_')[-1]}"],
+        "git commit",
+    )
+    _run(["git", "push", "origin", branch], "git push")
+
+
+# --------------------------------------------------------------------------
 # Slack
 # --------------------------------------------------------------------------
 
