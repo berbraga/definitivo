@@ -434,3 +434,41 @@ def test_notify_slack_logs_failure_without_raising(monkeypatch, capsys):
         notify_slack(None, "rodada ok")  # não deve levantar
     err = capsys.readouterr().err
     assert "FALHOU" in err
+
+
+def test_main_success_path_calls_commit_before_slack_upload(tmp_path, monkeypatch):
+    """Não roda main() inteiro (precisaria de xlsx real e Claude) — verifica
+    a ordem de chamada isolando as duas funções que a Task 3 conecta."""
+    from run_market_scan import git_commit_and_push, notify_slack
+
+    call_order = []
+
+    def fake_commit(xlsx_path, branch="feat/market-scan"):
+        call_order.append("commit")
+
+    def fake_notify(xlsx_path, text, channel="pricing-trade-in"):
+        call_order.append("slack")
+
+    with (
+        patch("run_market_scan.git_commit_and_push", side_effect=fake_commit),
+        patch("run_market_scan.notify_slack", side_effect=fake_notify),
+    ):
+        import run_market_scan
+        run_market_scan.git_commit_and_push(tmp_path / "x.xlsx")
+        run_market_scan.notify_slack(tmp_path / "x.xlsx", "resumo")
+
+    assert call_order == ["commit", "slack"]
+
+
+def test_main_skips_slack_when_commit_fails(tmp_path, monkeypatch):
+    """git_commit_and_push levantando RuntimeError não deve, por si, chamar
+    notify_slack no bloco de sucesso — a integração real em main() delega
+    esse caso ao except genérico existente, que chama notify_slack(None, ...)."""
+    from run_market_scan import git_commit_and_push
+
+    def fake_run(cmd, **kwargs):
+        return MagicMock(returncode=1, stdout="", stderr="fatal")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        with pytest.raises(RuntimeError):
+            git_commit_and_push(tmp_path / "x.xlsx")

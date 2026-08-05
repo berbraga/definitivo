@@ -747,6 +747,7 @@ def main() -> int:
             f"cache_read {cost['total_cache_read']} · "
             f"razao cache_read/(input+output) {cost['cache_read_ratio']:.1f}"
         )
+        git_commit_and_push(out_xlsx)
         notify_slack(out_xlsx, summary)
         return 1 if failures else 0
 
