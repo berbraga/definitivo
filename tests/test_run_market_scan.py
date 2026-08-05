@@ -1,5 +1,6 @@
 import csv
 import json
+import urllib.error
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -361,3 +362,86 @@ def test_git_commit_and_push_extracts_date_from_iso_pattern():
     msg_idx = commit_cmd.index("-m") + 1
     # Should extract 2026-08-05 via regex, not rely on split('_')[-1]
     assert commit_cmd[msg_idx] == "chore(scan): atualiza referência de mercado 2026-08-05"
+
+
+from run_market_scan import notify_slack
+
+
+def test_notify_slack_posts_text_only_when_no_file(monkeypatch, capsys):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+    calls = []
+
+    def fake_urlopen(req, timeout=15):
+        calls.append(req.full_url)
+        response = MagicMock()
+        response.read.return_value = b'{"ok": true}'
+        response.status = 200
+        return response.__enter__() if hasattr(response, "__enter__") else response
+
+    class FakeCtx:
+        def __enter__(self):
+            resp = MagicMock()
+            resp.read.return_value = b'{"ok": true}'
+            resp.status = 200
+            return resp
+
+        def __exit__(self, *a):
+            return False
+
+    with patch("urllib.request.urlopen", return_value=FakeCtx()):
+        notify_slack(None, "rodada ok")
+
+    out = capsys.readouterr().out
+    assert "enviado" in out.lower() or "slack" in out.lower()
+
+
+def test_notify_slack_skips_when_token_missing(monkeypatch, capsys):
+    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
+    notify_slack(None, "rodada ok")
+    out = capsys.readouterr().out
+    assert "SLACK_BOT_TOKEN" in out
+
+
+def test_notify_slack_uploads_file_when_xlsx_path_given(monkeypatch, tmp_path):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+    xlsx = tmp_path / "referencia-mercado_2026-08-05.xlsx"
+    xlsx.write_bytes(b"fake xlsx bytes")
+
+    responses = [
+        b'{"ok": true, "upload_url": "https://upload.example/put", "file_id": "F123"}',
+        b'{"ok": true}',  # resposta do PUT no upload_url
+        b'{"ok": true, "files": [{"id": "F123"}]}',  # completeUploadExternal
+    ]
+    call_urls = []
+
+    class FakeCtx:
+        def __init__(self, body):
+            self._body = body
+
+        def __enter__(self):
+            resp = MagicMock()
+            resp.read.return_value = self._body
+            resp.status = 200
+            return resp
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=15):
+        call_urls.append(req.full_url)
+        return FakeCtx(responses.pop(0))
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        notify_slack(xlsx, "rodada ok")
+
+    assert "files.getUploadURLExternal" in call_urls[0]
+    assert call_urls[1] == "https://upload.example/put"
+    assert "files.completeUploadExternal" in call_urls[2]
+
+
+def test_notify_slack_logs_failure_without_raising(monkeypatch, capsys):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("boom")):
+        notify_slack(None, "rodada ok")  # não deve levantar
+    err = capsys.readouterr().err
+    assert "FALHOU" in err

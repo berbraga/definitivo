@@ -473,21 +473,73 @@ def git_commit_and_push(xlsx_path: Path, branch: str = "feat/market-scan") -> No
 
 
 # --------------------------------------------------------------------------
-# Slack
+# Slack — upload do resultado via Bot Token (Web API, sem SDK externo)
 # --------------------------------------------------------------------------
 
-def notify_slack(text: str) -> None:
-    url = os.environ.get("SLACK_WEBHOOK_URL")
-    if not url:
-        print("[slack] SLACK_WEBHOOK_URL não definida — pulando notificação.")
+SLACK_API = "https://slack.com/api"
+
+
+def _slack_api_call(method: str, token: str, data: bytes, content_type: str) -> dict:
+    req = urllib.request.Request(
+        f"{SLACK_API}/{method}",
+        data=data,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": content_type},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode())
+
+
+def notify_slack(xlsx_path: Path | None, text: str, channel: str = "pricing-trade-in") -> None:
+    """Envia o resumo da rodada ao Slack, com o xlsx anexado quando houver.
+
+    Sem xlsx_path (erro/interrupção, sem arquivo consolidado): só mensagem de
+    texto via chat.postMessage. Com xlsx_path: upload real do arquivo via
+    Web API (getUploadURLExternal -> PUT do binário -> completeUploadExternal),
+    já que um webhook simples não sobe arquivo, só texto.
+    """
+    token = os.environ.get("SLACK_BOT_TOKEN")
+    if not token:
+        print("[slack] SLACK_BOT_TOKEN não definida — pulando notificação.")
         return
-    body = json.dumps({"text": text}).encode()
-    req = urllib.request.Request(url, data=body,
-                                 headers={"Content-Type": "application/json"})
+
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            print(f"[slack] enviado ({resp.status})")
-    except urllib.error.URLError as exc:
+        if xlsx_path is None:
+            body = json.dumps({"channel": channel, "text": text}).encode()
+            result = _slack_api_call("chat.postMessage", token, body, "application/json")
+            if not result.get("ok"):
+                raise RuntimeError(str(result))
+            print(f"[slack] mensagem enviada ao canal {channel}")
+            return
+
+        file_bytes = xlsx_path.read_bytes()
+        meta = _slack_api_call(
+            "files.getUploadURLExternal", token,
+            f"filename={xlsx_path.name}&length={len(file_bytes)}".encode(),
+            "application/x-www-form-urlencoded",
+        )
+        if not meta.get("ok"):
+            raise RuntimeError(str(meta))
+
+        upload_req = urllib.request.Request(
+            meta["upload_url"], data=file_bytes, method="POST",
+        )
+        with urllib.request.urlopen(upload_req, timeout=60) as resp:
+            resp.read()
+
+        complete_body = json.dumps({
+            "files": [{"id": meta["file_id"], "title": xlsx_path.name}],
+            "channel_id": channel,
+            "initial_comment": text,
+        }).encode()
+        result = _slack_api_call(
+            "files.completeUploadExternal", token, complete_body, "application/json",
+        )
+        if not result.get("ok"):
+            raise RuntimeError(str(result))
+        print(f"[slack] arquivo {xlsx_path.name} enviado ao canal {channel}")
+
+    except (urllib.error.URLError, RuntimeError) as exc:
         print(f"[slack] FALHOU: {exc}", file=sys.stderr)
 
 
@@ -692,15 +744,15 @@ def main() -> int:
             f"cache_read {cost['total_cache_read']} · "
             f"razao cache_read/(input+output) {cost['cache_read_ratio']:.1f}"
         )
-        notify_slack(summary)
+        notify_slack(out_xlsx, summary)
         return 1 if failures else 0
 
     except KeyboardInterrupt:
-        notify_slack(f":warning: Rodada interrompida manualmente "
+        notify_slack(None, f":warning: Rodada interrompida manualmente "
                      f"({len(results)} dispositivos já processados, checkpoint salvo).")
         return 130
     except Exception as exc:  # noqa: BLE001
-        notify_slack(f":rotating_light: Rodada ABORTOU: `{exc}`\n"
+        notify_slack(None, f":rotating_light: Rodada ABORTOU: `{exc}`\n"
                      f"Checkpoint em `{cache_dir}` — rode de novo para retomar.")
         raise
 
