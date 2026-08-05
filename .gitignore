@@ -15,7 +15,14 @@ build/
 .env
 
 # Artefatos de execucao
-out/
+# "out/*" (nao "out/"): permite a negacao abaixo liberar um arquivo
+# especifico dentro do diretorio. Git exige "designorar" o diretorio pai
+# para uma negacao valer num arquivo dentro dele. out/* so cobre entradas
+# de topo-nivel (nao recursivo como "out/" fazia) — por isso subdiretorios
+# que devem continuar ignorados (cache, metrics) precisam de regra propria.
+out/*
+out/cache/
+out/metrics/
 .cache/
 *.sqlite
 *.sqlite-journal
@@ -25,3 +32,9 @@ out/
 # Planilhas de entrada: dados internos de precificacao, nao versionar
 *.xlsx
 *.xls
+
+# Excecao: relatorio de saida do market scan (out/referencia-mercado_*.xlsx)
+# precisa ser commitado pela automacao. Fica por ultimo de proposito: regras
+# de negacao (!) so tem efeito se vierem depois de QUALQUER regra que
+# ignoraria o arquivo (aqui, tanto "out/*" quanto "*.xlsx" o ignoram).
+!out/referencia-mercado_*.xlsx
