@@ -37,16 +37,10 @@ rodar nesse dia garante que a rodada sempre trabalha com cache fresco.
 Nenhuma das duas credenciais deve ser commitada ou hardcoded em nenhum
 arquivo do repositório.
 
-**IMPORTANTE**: antes do primeiro uso real, confirme se `channel_id` em
-`notify_slack()` (`run_market_scan.py`) aceita o nome do canal
-(`"pricing-trade-in"`) ou exige o ID do canal (formato `C0XXXXXXXXX`,
-visível nos detalhes do canal no Slack) — se for ID, atualize o valor
-padrão da função ou passe o ID via variável de ambiente antes de ativar a
-Routine. O parâmetro documentado pela Slack para `files.completeUploadExternal`
-é `channel_id`, que tipicamente espera o ID codificado, não um nome
-legível — isso não foi verificado contra a API real do Slack nesta revisão
-e pode causar falha silenciosa (`{"ok": false}`, logado como `[slack]
-FALHOU`) em todo upload de arquivo em produção.
+Confirmado contra a API real do Slack: `channel_id` em `notify_slack()`
+(`run_market_scan.py`) exige o ID do canal, não o nome. O canal
+`pricing-trade-in` tem ID `C0BN18AS38T`, já configurado como valor padrão
+da função. Se o canal for recriado ou trocado, atualize esse valor.
 
 ## Autenticação do Claude CLI dentro da Routine
 

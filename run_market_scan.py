@@ -530,7 +530,7 @@ def _slack_api_call(method: str, token: str, data: bytes, content_type: str) -> 
         return json.loads(resp.read().decode())
 
 
-def notify_slack(xlsx_path: Path | None, text: str, channel: str = "pricing-trade-in") -> None:
+def notify_slack(xlsx_path: Path | None, text: str, channel: str = "C0BN18AS38T") -> None:
     """Envia o resumo da rodada ao Slack, com o xlsx anexado quando houver.
 
     Sem xlsx_path (erro/interrupção, sem arquivo consolidado): só mensagem de
