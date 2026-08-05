@@ -13,6 +13,14 @@ uv run python run_market_scan.py --input Template-iPhone.xlsx
 Ajuste `--input` para a planilha de dispositivos correta a cada execução,
 se houver mais de uma fonte de entrada.
 
+**Atenção**: como `*.xlsx`/`*.xls` são gitignored (dados internos de
+precificação, ver `.gitignore`), `Template-iPhone.xlsx` **não** existirá no
+clone fresco que a Routine faz do repositório — o arquivo de entrada precisa
+ser provisionado por algum outro caminho (por exemplo: commitado em outro
+local fora do padrão ignorado, ou disponibilizado via mecanismo de
+upload/secrets da própria Routine). Isso ainda não foi resolvido; precisa
+ser decidido no momento de configurar a Routine de fato.
+
 ## Frequência
 
 Semanal. Recomendado rodar aos sábados: o cache por dispositivo já renova
@@ -28,6 +36,17 @@ rodar nesse dia garante que a rodada sempre trabalha com cache fresco.
 
 Nenhuma das duas credenciais deve ser commitada ou hardcoded em nenhum
 arquivo do repositório.
+
+**IMPORTANTE**: antes do primeiro uso real, confirme se `channel_id` em
+`notify_slack()` (`run_market_scan.py`) aceita o nome do canal
+(`"pricing-trade-in"`) ou exige o ID do canal (formato `C0XXXXXXXXX`,
+visível nos detalhes do canal no Slack) — se for ID, atualize o valor
+padrão da função ou passe o ID via variável de ambiente antes de ativar a
+Routine. O parâmetro documentado pela Slack para `files.completeUploadExternal`
+é `channel_id`, que tipicamente espera o ID codificado, não um nome
+legível — isso não foi verificado contra a API real do Slack nesta revisão
+e pode causar falha silenciosa (`{"ok": false}`, logado como `[slack]
+FALHOU`) em todo upload de arquivo em produção.
 
 ## Autenticação do Claude CLI dentro da Routine
 
