@@ -436,39 +436,67 @@ def test_notify_slack_logs_failure_without_raising(monkeypatch, capsys):
     assert "FALHOU" in err
 
 
-def test_main_success_path_calls_commit_before_slack_upload(tmp_path, monkeypatch):
-    """Não roda main() inteiro (precisaria de xlsx real e Claude) — verifica
-    a ordem de chamada isolando as duas funções que a Task 3 conecta."""
-    from run_market_scan import git_commit_and_push, notify_slack
+def test_main_skips_success_slack_and_falls_through_to_abort_notify_when_commit_fails(
+    tmp_path, monkeypatch, make_sheet,
+):
+    """Drives main() itself (not just the two functions in isolation) to prove
+    the real wiring: a RuntimeError from git_commit_and_push must (a) never
+    reach the success-path notify_slack(out_xlsx, summary) call, and (b) fall
+    through to the existing generic `except Exception` handler, which calls
+    notify_slack(None, ...) for the abort case.
 
-    call_order = []
+    The device is pre-seeded in this week's cache so process_batch never calls
+    run_claude_batch / the real `claude` CLI — keeps this a fast, offline unit
+    test while still exercising main()'s real control flow end-to-end.
+    """
+    import sys
+    from datetime import date, datetime, timezone
 
-    def fake_commit(xlsx_path, branch="feat/market-scan"):
-        call_order.append("commit")
+    import run_market_scan as rms
+
+    xlsx = make_sheet(
+        tmp_path,
+        rows=[{
+            "Device name*": "IPHONE XR 64GB A0",
+            "Manufacturer*": "APPLE",
+            "Model*": "IPHONE XR",
+            "Storage, GB*": 64,
+            "Price for In-store": 370.0,
+            "ERP Code": "20023A0",
+        }],
+    )
+    output_dir = tmp_path / "out"
+
+    current_week = rms._last_saturday(datetime.now(timezone.utc).date())
+    cache_dir = output_dir / "cache"
+    cache_dir.mkdir(parents=True)
+    cached_entry = {
+        "anuncios": [{"preco_brl": 900.0, "url": "https://x", "fonte": "trocafy"}],
+        "fontes_consultadas": ["trocafy"],
+    }
+    rms.device_cache_path(cache_dir, "20023A0", current_week).write_text(
+        json.dumps(cached_entry), encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_market_scan.py", "--input", str(xlsx), "--output-dir", str(output_dir)],
+    )
+
+    notify_calls = []
 
     def fake_notify(xlsx_path, text, channel="pricing-trade-in"):
-        call_order.append("slack")
+        notify_calls.append((xlsx_path, text, channel))
 
     with (
-        patch("run_market_scan.git_commit_and_push", side_effect=fake_commit),
+        patch("run_market_scan.preflight", return_value=None),
+        patch("run_market_scan.git_commit_and_push", side_effect=RuntimeError("push rejected")),
         patch("run_market_scan.notify_slack", side_effect=fake_notify),
+        pytest.raises(RuntimeError, match="push rejected"),
     ):
-        import run_market_scan
-        run_market_scan.git_commit_and_push(tmp_path / "x.xlsx")
-        run_market_scan.notify_slack(tmp_path / "x.xlsx", "resumo")
+        rms.main()
 
-    assert call_order == ["commit", "slack"]
-
-
-def test_main_skips_slack_when_commit_fails(tmp_path, monkeypatch):
-    """git_commit_and_push levantando RuntimeError não deve, por si, chamar
-    notify_slack no bloco de sucesso — a integração real em main() delega
-    esse caso ao except genérico existente, que chama notify_slack(None, ...)."""
-    from run_market_scan import git_commit_and_push
-
-    def fake_run(cmd, **kwargs):
-        return MagicMock(returncode=1, stdout="", stderr="fatal")
-
-    with patch("subprocess.run", side_effect=fake_run):
-        with pytest.raises(RuntimeError):
-            git_commit_and_push(tmp_path / "x.xlsx")
+    assert len(notify_calls) == 1
+    xlsx_path, text, _channel = notify_calls[0]
+    assert xlsx_path is None
+    assert "ABORTOU" in text
