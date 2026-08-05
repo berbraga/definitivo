@@ -451,9 +451,22 @@ def git_commit_and_push(xlsx_path: Path, branch: str = "feat/market-scan") -> No
                 f"{(proc.stderr or proc.stdout or '').strip()[:500]}"
             )
 
+    def _extract_date(path: Path) -> str:
+        """Extrai a data ISO (YYYY-MM-DD) do stem do arquivo.
+
+        Busca por padrão ISO no stem; cai para o último segmento separado
+        por underscore se não encontrado (compatibilidade com filenames
+        não-convencionais).
+        """
+        match = re.search(r'\d{4}-\d{2}-\d{2}', path.stem)
+        if match:
+            return match.group()
+        return path.stem.split('_')[-1]
+
     _run(["git", "add", str(xlsx_path)], "git add")
+    date_str = _extract_date(xlsx_path)
     _run(
-        ["git", "commit", "-m", f"chore(scan): atualiza referência de mercado {xlsx_path.stem.split('_')[-1]}"],
+        ["git", "commit", "-m", f"chore(scan): atualiza referência de mercado {date_str}"],
         "git commit",
     )
     _run(["git", "push", "origin", branch], "git push")

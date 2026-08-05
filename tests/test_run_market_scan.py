@@ -317,3 +317,47 @@ def test_git_commit_and_push_raises_on_push_failure():
     with patch("subprocess.run", side_effect=fake_run):
         with pytest.raises(RuntimeError, match="git push"):
             git_commit_and_push(Path("out/referencia-mercado_2026-08-05.xlsx"))
+
+
+def test_git_commit_and_push_commits_with_iso_date_from_filename():
+    from pathlib import Path
+    from run_market_scan import git_commit_and_push
+
+    commit_msg = []
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["git", "commit"]:
+            commit_msg.append(cmd)
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        git_commit_and_push(Path("out/referencia-mercado_2026-08-05.xlsx"))
+
+    assert len(commit_msg) == 1
+    commit_cmd = commit_msg[0]
+    assert commit_cmd[:2] == ["git", "commit"]
+    assert "-m" in commit_cmd
+    msg_idx = commit_cmd.index("-m") + 1
+    assert commit_cmd[msg_idx] == "chore(scan): atualiza referência de mercado 2026-08-05"
+
+
+def test_git_commit_and_push_extracts_date_from_iso_pattern():
+    from pathlib import Path
+    from run_market_scan import git_commit_and_push
+
+    commit_msg = []
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["git", "commit"]:
+            commit_msg.append(cmd)
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        # Filename with multiple underscores; regex should extract ISO date
+        git_commit_and_push(Path("out/ref_mercado_report_2026-08-05_v2.xlsx"))
+
+    assert len(commit_msg) == 1
+    commit_cmd = commit_msg[0]
+    msg_idx = commit_cmd.index("-m") + 1
+    # Should extract 2026-08-05 via regex, not rely on split('_')[-1]
+    assert commit_cmd[msg_idx] == "chore(scan): atualiza referência de mercado 2026-08-05"
