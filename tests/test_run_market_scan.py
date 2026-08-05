@@ -1,6 +1,7 @@
 import csv
 import json
 import urllib.error
+import urllib.parse
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -274,6 +275,77 @@ def test_process_batch_cached_pending_split(tmp_path):
     assert written_entry["erp_code"] == "AB-CD-12"  # conteúdo é o que o modelo mandou
 
 
+def test_gitignore_allows_staging_referencia_mercado_xlsx_but_ignores_rest(tmp_path):
+    """Critical #1 do review: `out/` e `*.xlsx` são gitignored, então
+    `git add out/referencia-mercado_*.xlsx` falharia (silenciosamente
+    ignorado) toda rodada. Este teste usa um repositório git REAL (não
+    subprocess.run mockado) para provar que o `.gitignore` do próprio
+    repositório de fato libera esse padrão específico e mantém tudo o resto
+    ignorado — é exatamente a classe de bug que testes só-mockados não pegam.
+    """
+    import shutil
+    import subprocess as sp
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parent.parent
+    gitignore_src = repo_root / ".gitignore"
+
+    def run_git(*args: str, cwd: Path) -> sp.CompletedProcess:
+        return sp.run(
+            ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=30,
+        )
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_git("init", "-q", cwd=repo)
+    run_git("config", "user.email", "test@example.com", cwd=repo)
+    run_git("config", "user.name", "Test", cwd=repo)
+    shutil.copy(gitignore_src, repo / ".gitignore")
+
+    (repo / "out").mkdir()
+    (repo / "out" / "cache").mkdir()
+    (repo / "out" / "metrics").mkdir()
+
+    wanted = repo / "out" / "referencia-mercado_2026-08-05.xlsx"
+    wanted.write_bytes(b"fake xlsx bytes")
+
+    other_out_xlsx = repo / "out" / "whatever.xlsx"
+    other_out_xlsx.write_bytes(b"fake")
+
+    cache_file = repo / "out" / "cache" / "some-device_2026-W32.json"
+    cache_file.write_text("{}")
+
+    metrics_file = repo / "out" / "metrics" / "rodada_2026-08-05.csv"
+    metrics_file.write_text("a,b\n")
+
+    elsewhere_xlsx = repo / "Template-iPhone.xlsx"
+    elsewhere_xlsx.write_bytes(b"fake input sheet")
+
+    # O arquivo de saída específico deve ser stageable.
+    add_wanted = run_git("add", str(wanted), cwd=repo)
+    assert add_wanted.returncode == 0, add_wanted.stderr
+    status = run_git("status", "--porcelain", cwd=repo)
+    assert "referencia-mercado_2026-08-05.xlsx" in status.stdout
+
+    # Outro xlsx dentro de out/ (não o padrão específico) deve continuar ignorado.
+    add_other = run_git("add", str(other_out_xlsx), cwd=repo)
+    assert add_other.returncode != 0
+    check_other = run_git("check-ignore", "-v", str(other_out_xlsx), cwd=repo)
+    assert check_other.returncode == 0  # 0 = está ignorado
+
+    # out/cache/ e out/metrics/ devem continuar ignorados.
+    check_cache = run_git("check-ignore", "-v", str(cache_file), cwd=repo)
+    assert check_cache.returncode == 0
+    check_metrics = run_git("check-ignore", "-v", str(metrics_file), cwd=repo)
+    assert check_metrics.returncode == 0
+
+    # *.xlsx fora de out/ (planilha de entrada — dados internos) continua ignorado.
+    check_elsewhere = run_git("check-ignore", "-v", str(elsewhere_xlsx), cwd=repo)
+    assert check_elsewhere.returncode == 0
+    add_elsewhere = run_git("add", str(elsewhere_xlsx), cwd=repo)
+    assert add_elsewhere.returncode != 0
+
+
 def test_git_commit_and_push_runs_add_commit_push_in_order():
     from pathlib import Path
     from run_market_scan import git_commit_and_push
@@ -282,15 +354,18 @@ def test_git_commit_and_push_runs_add_commit_push_in_order():
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
+        if cmd[:4] == ["git", "diff", "--cached", "--quiet"]:
+            return MagicMock(returncode=1, stdout="", stderr="")  # ha algo staged
         return MagicMock(returncode=0, stdout="", stderr="")
 
     with patch("subprocess.run", side_effect=fake_run):
         git_commit_and_push(Path("out/referencia-mercado_2026-08-05.xlsx"))
 
     assert calls[0][:2] == ["git", "add"]
-    assert calls[1][:2] == ["git", "commit"]
-    assert calls[2][:2] == ["git", "push"]
-    assert "feat/market-scan" in calls[2]
+    assert calls[1][:4] == ["git", "diff", "--cached", "--quiet"]
+    assert calls[2][:2] == ["git", "commit"]
+    assert calls[3][:2] == ["git", "push"]
+    assert "feat/market-scan" in calls[3]
 
 
 def test_git_commit_and_push_raises_on_add_failure():
@@ -313,6 +388,8 @@ def test_git_commit_and_push_raises_on_push_failure():
         calls["n"] += 1
         if cmd[:2] == ["git", "push"]:
             return MagicMock(returncode=1, stdout="", stderr="rejected")
+        if cmd[:4] == ["git", "diff", "--cached", "--quiet"]:
+            return MagicMock(returncode=1, stdout="", stderr="")  # ha algo staged
         return MagicMock(returncode=0, stdout="", stderr="")
 
     with patch("subprocess.run", side_effect=fake_run):
@@ -329,6 +406,8 @@ def test_git_commit_and_push_commits_with_iso_date_from_filename():
     def fake_run(cmd, **kwargs):
         if cmd[:2] == ["git", "commit"]:
             commit_msg.append(cmd)
+        if cmd[:4] == ["git", "diff", "--cached", "--quiet"]:
+            return MagicMock(returncode=1, stdout="", stderr="")  # ha algo staged
         return MagicMock(returncode=0, stdout="", stderr="")
 
     with patch("subprocess.run", side_effect=fake_run):
@@ -351,6 +430,8 @@ def test_git_commit_and_push_extracts_date_from_iso_pattern():
     def fake_run(cmd, **kwargs):
         if cmd[:2] == ["git", "commit"]:
             commit_msg.append(cmd)
+        if cmd[:4] == ["git", "diff", "--cached", "--quiet"]:
+            return MagicMock(returncode=1, stdout="", stderr="")  # ha algo staged
         return MagicMock(returncode=0, stdout="", stderr="")
 
     with patch("subprocess.run", side_effect=fake_run):
@@ -362,6 +443,34 @@ def test_git_commit_and_push_extracts_date_from_iso_pattern():
     msg_idx = commit_cmd.index("-m") + 1
     # Should extract 2026-08-05 via regex, not rely on split('_')[-1]
     assert commit_cmd[msg_idx] == "chore(scan): atualiza referência de mercado 2026-08-05"
+
+
+def test_git_commit_and_push_noop_when_nothing_staged(capsys):
+    """Xlsx byte-idêntico ao da última rodada (ex.: segunda rodada na mesma
+    semana de cache): `git diff --cached --quiet` reporta nada staged
+    (exit 0) -> a função deve retornar normalmente, SEM chamar `git commit`
+    nem `git push`, e sem levantar RuntimeError (Critical #2 do review).
+    """
+    from pathlib import Path
+    from run_market_scan import git_commit_and_push
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:4] == ["git", "diff", "--cached", "--quiet"]:
+            return MagicMock(returncode=0, stdout="", stderr="")  # nada staged
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        git_commit_and_push(Path("out/referencia-mercado_2026-08-05.xlsx"))  # não deve levantar
+
+    assert calls[0][:2] == ["git", "add"]
+    assert calls[1][:4] == ["git", "diff", "--cached", "--quiet"]
+    assert not any(c[:2] == ["git", "commit"] for c in calls)
+    assert not any(c[:2] == ["git", "push"] for c in calls)
+    out = capsys.readouterr().out
+    assert "nada para commitar" in out
 
 
 def test_notify_slack_posts_text_only_when_no_file(monkeypatch, capsys):
@@ -426,6 +535,91 @@ def test_notify_slack_uploads_file_when_xlsx_path_given(monkeypatch, tmp_path):
     assert "files.getUploadURLExternal" in call_urls[0]
     assert call_urls[1] == "https://upload.example/put"
     assert "files.completeUploadExternal" in call_urls[2]
+
+
+def test_notify_slack_urlencodes_filename_with_special_chars(monkeypatch, tmp_path):
+    """Fix #4 do review: o corpo do getUploadURLExternal usava interpolação
+    de string crua (`f"filename={name}&length={n}"`), que quebra com espaço,
+    '&', '=' ou não-ASCII no nome do arquivo. Agora usa urllib.parse.urlencode.
+    """
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+    xlsx = tmp_path / "referência mercado 2026-08-05 & final.xlsx"
+    xlsx.write_bytes(b"fake xlsx bytes")
+
+    responses = [
+        b'{"ok": true, "upload_url": "https://upload.example/put", "file_id": "F123"}',
+        b'{"ok": true}',
+        b'{"ok": true, "files": [{"id": "F123"}]}',
+    ]
+    captured_bodies = []
+
+    class FakeCtx:
+        def __init__(self, body):
+            self._body = body
+
+        def __enter__(self):
+            resp = MagicMock()
+            resp.read.return_value = self._body
+            resp.status = 200
+            return resp
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=15):
+        captured_bodies.append(getattr(req, "data", None))
+        return FakeCtx(responses.pop(0))
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        notify_slack(xlsx, "rodada ok")
+
+    first_body = captured_bodies[0].decode()
+    # urlencode escapa espaço, '&' e '=' do nome do arquivo — corpo bem-formado.
+    assert "filename=" in first_body
+    assert "length=" in first_body
+    assert " " not in first_body
+    parsed = urllib.parse.parse_qs(first_body)
+    assert parsed["filename"] == [xlsx.name]
+
+
+def test_notify_slack_raises_on_non_2xx_upload_status(monkeypatch, tmp_path, capsys):
+    """Fix Minor #6: status HTTP do upload nunca era checado; um upload que
+    responde 4xx/5xx era tratado como sucesso silencioso.
+    """
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+    xlsx = tmp_path / "referencia-mercado_2026-08-05.xlsx"
+    xlsx.write_bytes(b"fake xlsx bytes")
+
+    responses_meta = b'{"ok": true, "upload_url": "https://upload.example/put", "file_id": "F123"}'
+
+    class FakeCtx:
+        def __init__(self, body, status):
+            self._body = body
+            self._status = status
+
+        def __enter__(self):
+            resp = MagicMock()
+            resp.read.return_value = self._body
+            resp.status = self._status
+            return resp
+
+        def __exit__(self, *a):
+            return False
+
+    calls = {"n": 0}
+
+    def fake_urlopen(req, timeout=15):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return FakeCtx(responses_meta, 200)
+        return FakeCtx(b"", 500)  # upload PUT/POST falha com 500
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        notify_slack(xlsx, "rodada ok")  # não deve levantar (capturado internamente)
+
+    err = capsys.readouterr().err
+    assert "FALHOU" in err
+    assert "500" in err
 
 
 def test_notify_slack_logs_failure_without_raising(monkeypatch, capsys):

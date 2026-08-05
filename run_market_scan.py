@@ -31,6 +31,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -440,16 +441,25 @@ def git_commit_and_push(xlsx_path: Path, branch: str = "feat/market-scan") -> No
     """Commita e envia o xlsx gerado direto na branch ativa.
 
     Sem PR intermediário — decisão explícita para esta automação. Levanta
-    RuntimeError na primeira falha; quem chama decide se prossegue para o
-    Slack (não deve, numa rodada real: commit falho = nada para notificar).
+    RuntimeError na primeira falha real; quem chama decide se prossegue para
+    o Slack (não deve, numa rodada real: commit falho = nada para notificar).
+
+    "Nada para commitar" (xlsx idêntico ao da última rodada, ex.: segunda
+    rodada na mesma semana de cache) NÃO é falha real — é retorno normal,
+    sem push, sem exceção.
     """
-    def _run(cmd: list[str], step_name: str) -> None:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        if proc.returncode != 0:
+    repo_dir = Path(__file__).resolve().parent
+
+    def _run(cmd: list[str], step_name: str) -> subprocess.CompletedProcess:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=60, cwd=repo_dir,
+        )
+        if proc.returncode not in (0, 1):
             raise RuntimeError(
                 f"{step_name} falhou (código {proc.returncode}): "
                 f"{(proc.stderr or proc.stdout or '').strip()[:500]}"
             )
+        return proc
 
     def _extract_date(path: Path) -> str:
         """Extrai a data ISO (YYYY-MM-DD) do stem do arquivo.
@@ -463,13 +473,43 @@ def git_commit_and_push(xlsx_path: Path, branch: str = "feat/market-scan") -> No
             return match.group()
         return path.stem.split('_')[-1]
 
-    _run(["git", "add", str(xlsx_path)], "git add")
-    date_str = _extract_date(xlsx_path)
-    _run(
-        ["git", "commit", "-m", f"chore(scan): atualiza referência de mercado {date_str}"],
-        "git commit",
+    add_proc = subprocess.run(
+        ["git", "add", str(xlsx_path)], capture_output=True, text=True,
+        timeout=60, cwd=repo_dir,
     )
-    _run(["git", "push", "origin", branch], "git push")
+    if add_proc.returncode != 0:
+        raise RuntimeError(
+            f"git add falhou (código {add_proc.returncode}): "
+            f"{(add_proc.stderr or add_proc.stdout or '').strip()[:500]}"
+        )
+
+    # exit 0 = nada staged (diff vazio), exit 1 = algo staged. Qualquer outro
+    # código é falha real do próprio git diff, não um resultado válido.
+    staged_check = _run(["git", "diff", "--cached", "--quiet"], "git diff --cached")
+    if staged_check.returncode == 0:
+        print("[git] nada para commitar — xlsx idêntico ao da última rodada")
+        return
+
+    date_str = _extract_date(xlsx_path)
+    commit_proc = subprocess.run(
+        ["git", "commit", "-m", f"chore(scan): atualiza referência de mercado {date_str}"],
+        capture_output=True, text=True, timeout=60, cwd=repo_dir,
+    )
+    if commit_proc.returncode != 0:
+        raise RuntimeError(
+            f"git commit falhou (código {commit_proc.returncode}): "
+            f"{(commit_proc.stderr or commit_proc.stdout or '').strip()[:500]}"
+        )
+
+    push_proc = subprocess.run(
+        ["git", "push", "origin", branch], capture_output=True, text=True,
+        timeout=60, cwd=repo_dir,
+    )
+    if push_proc.returncode != 0:
+        raise RuntimeError(
+            f"git push falhou (código {push_proc.returncode}): "
+            f"{(push_proc.stderr or push_proc.stdout or '').strip()[:500]}"
+        )
 
 
 # --------------------------------------------------------------------------
@@ -515,7 +555,9 @@ def notify_slack(xlsx_path: Path | None, text: str, channel: str = "pricing-trad
         file_bytes = xlsx_path.read_bytes()
         meta = _slack_api_call(
             "files.getUploadURLExternal", token,
-            f"filename={xlsx_path.name}&length={len(file_bytes)}".encode(),
+            urllib.parse.urlencode(
+                {"filename": xlsx_path.name, "length": len(file_bytes)}
+            ).encode(),
             "application/x-www-form-urlencoded",
         )
         if not meta.get("ok"):
@@ -529,6 +571,10 @@ def notify_slack(xlsx_path: Path | None, text: str, channel: str = "pricing-trad
         )
         with urllib.request.urlopen(upload_req, timeout=60) as resp:
             resp.read()
+            if not (200 <= resp.status < 300):
+                raise RuntimeError(
+                    f"upload do xlsx falhou com status HTTP {resp.status}"
+                )
 
         complete_body = json.dumps({
             "files": [{"id": meta["file_id"], "title": xlsx_path.name}],
